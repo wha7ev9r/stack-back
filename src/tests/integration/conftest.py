@@ -293,6 +293,12 @@ def sqlite_only_container(docker_client, compose_project_name, compose_up):
 
 
 @pytest.fixture
+def sqlite_auto_container(docker_client, compose_project_name, compose_up):
+    """Return the sqlite:auto live-WAL container."""
+    return _container_by_service(docker_client, compose_project_name, "sqlite_auto")
+
+
+@pytest.fixture
 def vaultwarden_container(docker_client, compose_project_name, compose_up):
     """Return the fake Vaultwarden online-mode container."""
     return _container_by_service(docker_client, compose_project_name, "vaultwarden")

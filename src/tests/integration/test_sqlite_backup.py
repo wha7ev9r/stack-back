@@ -54,6 +54,71 @@ def test_live_wal_sqlite_backup_and_volume_exclusion(
     assert "/volumes/sqlite/data/app.db-shm" not in listed
 
 
+def test_sqlite_auto_discovers_and_excludes(
+    run_rcb_command, backup_container, sqlite_auto_container
+):
+    exit_code, output = run_rcb_command("status")
+    assert exit_code == 0, output
+    assert "service: sqlite_auto" in output
+    assert "sqlite mode: auto" in output
+
+    code, output = sqlite_auto_container.exec_run("ls /data")
+    assert code == 0
+    assert "auto.db-wal" in output.decode()
+
+    exit_code, output = run_rcb_command("backup")
+    assert exit_code == 0, output
+
+    auto_snapshot = snapshot_with_path(
+        backup_container, "/databases/sqlite_auto/data/auto.db", prefix=True
+    )
+    restore(backup_container, auto_snapshot["id"], "/tmp/restore-sqlite-auto")
+    code, output = backup_container.exec_run(
+        [
+            "python",
+            "-c",
+            "import sqlite3; c=sqlite3.connect('file:/tmp/restore-sqlite-auto/databases/sqlite_auto/data/auto.db?mode=ro', uri=True); "
+            "print(c.execute('PRAGMA integrity_check').fetchone()[0]); "
+            "print(c.execute('SELECT count(*) FROM events').fetchone()[0]); c.close()",
+        ]
+    )
+    assert code == 0, output.decode()
+    lines = output.decode().strip().splitlines()
+    assert lines[0] == "ok"
+    assert int(lines[1]) >= 1
+
+    extensionless_snapshot = snapshot_with_path(
+        backup_container,
+        "/databases/sqlite_auto/data/extensionless",
+        prefix=True,
+    )
+    restore(
+        backup_container,
+        extensionless_snapshot["id"],
+        "/tmp/restore-sqlite-auto-extensionless",
+    )
+    code, output = backup_container.exec_run(
+        [
+            "python",
+            "-c",
+            "import sqlite3; c=sqlite3.connect('/tmp/restore-sqlite-auto-extensionless/databases/sqlite_auto/data/extensionless'); "
+            "print(c.execute('PRAGMA integrity_check').fetchone()[0]); "
+            "print(c.execute('SELECT value FROM items').fetchone()[0]); c.close()",
+        ]
+    )
+    assert code == 0, output.decode()
+    assert output.decode().strip().splitlines() == ["ok", "extensionless"]
+
+    volume_snapshot = snapshot_with_path(backup_container, "/volumes")
+    code, output = backup_container.exec_run(["restic", "ls", volume_snapshot["id"]])
+    assert code == 0, output.decode()
+    listed = output.decode()
+    assert "/volumes/sqlite_auto/data/keep.txt" in listed
+    assert "/volumes/sqlite_auto/data/auto.db" not in listed
+    assert "/volumes/sqlite_auto/data/extensionless" not in listed
+    assert "/volumes/sqlite_auto/data/auto.db-wal" not in listed
+
+
 def test_idle_wal_sqlite_only_backup(
     run_rcb_command, backup_container, sqlite_only_container
 ):

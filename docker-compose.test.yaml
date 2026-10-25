@@ -49,6 +49,8 @@ services:
         condition: service_healthy
       sqlite_only:
         condition: service_healthy
+      sqlite_auto:
+        condition: service_healthy
       vaultwarden:
         condition: service_healthy
       vaultwarden_consistent:
@@ -182,6 +184,42 @@ services:
     networks:
       - test-network
 
+  sqlite_auto:
+    image: python:3.13-alpine
+    labels:
+      stack-back.sqlite: "auto"
+      stack-back.volumes: "true"
+    volumes:
+      - sqlite_auto_data:/data
+    command:
+      - python
+      - -c
+      - |
+        import pathlib, sqlite3, time
+        pathlib.Path("/data/keep.txt").write_text("keep")
+        con = sqlite3.connect("/data/auto.db")
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, note TEXT)")
+        con.execute("INSERT INTO events (note) VALUES ('seed')")
+        con.commit()
+        ext = sqlite3.connect("/data/extensionless")
+        ext.execute("CREATE TABLE IF NOT EXISTS items (value TEXT)")
+        ext.execute("INSERT INTO items (value) VALUES ('extensionless')")
+        ext.commit()
+        ext.close()
+        pathlib.Path("/tmp/ready").touch()
+        while True:
+            con.execute("INSERT INTO events (note) VALUES ('tick')")
+            con.commit()
+            time.sleep(0.5)
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks:
+      - test-network
+
   vaultwarden:
     image: python:3.13-alpine
     labels:
@@ -277,6 +315,7 @@ volumes:
   postgres_data:
   sqlite_data:
   sqlite_only_data:
+  sqlite_auto_data:
   vaultwarden_data:
   vaultwarden_consistent_data:
   excluded_data:

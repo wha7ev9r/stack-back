@@ -148,6 +148,13 @@ def status(config, containers):
                     ping,
                     destination if destination is not None else "<not configured>",
                 )
+            if (
+                isinstance(instance, containers_db.SqliteContainer)
+                and container.sqlite_auto_enabled
+            ):
+                logger.info(
+                    " - sqlite mode: auto (read-only discovery at backup time)"
+                )
             if isinstance(instance, containers_db.VaultwardenContainer):
                 logger.info(
                     " - vaultwarden mode: %s",
@@ -391,6 +398,10 @@ def start_backup_process(config, containers):
     if len(containers.containers_for_backup()) == 0 and not has_volumes:
         logger.error("No containers for backup found")
         exit(1)
+
+    # Discover service-level SQLite auto databases before the volume snapshot
+    # so their raw files can be excluded from /volumes.
+    containers.discover_auto_sqlite()
 
     # stop containers labeled to stop during backup
     stopped_containers = containers.stop_during_backup_containers

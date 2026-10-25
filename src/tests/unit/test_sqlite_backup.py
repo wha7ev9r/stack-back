@@ -24,6 +24,34 @@ def create_database(path: Path, *, wal: bool = True, keep_open: bool = False):
     return connection
 
 
+def test_find_sqlite_databases(tmp_path):
+    create_database(tmp_path / "app.db")
+    create_database(tmp_path / "extensionless", wal=False)
+    (tmp_path / "notes.txt").write_text("not a database")
+    (tmp_path / "app.db-wal").write_bytes(b"sidecar")
+    (tmp_path / "link.db").symlink_to(tmp_path / "app.db")
+
+    found = {path.name for path in sqlite_backup.find_sqlite_databases(tmp_path)}
+    assert found == {"app.db", "extensionless"}
+
+
+def test_export_database_read_only_live_wal(tmp_path):
+    database = tmp_path / "live.db"
+    connection = create_database(database, keep_open=True)
+    try:
+        assert (tmp_path / "live.db-wal").exists()
+        destination = tmp_path / "read-only-export.db"
+        sqlite_backup.export_database(
+            database,
+            destination,
+            read_only=True,
+            verify="full",
+        )
+        sqlite_backup.check_database(destination, verify="full")
+    finally:
+        connection.close()
+
+
 def test_normalize_paths():
     paths, errors = sqlite_backup.normalize_sqlite_paths(
         " /data/app.db, /data/cache.db ,, /data/app.db "

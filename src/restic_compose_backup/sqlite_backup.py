@@ -12,6 +12,7 @@ without ``-wal``/``-shm`` sidecars.
 
 import hashlib
 import logging
+import os
 import posixpath
 import shutil
 import sqlite3
@@ -168,6 +169,51 @@ def read_sqlite_header(database: Path) -> bytes:
         return handle.read(len(SQLITE_MAGIC))
 
 
+def is_sqlite_file(path: Path) -> bool:
+    """Return True when ``path`` is a regular file with a SQLite header."""
+    path = Path(path)
+    try:
+        if not path.is_file() or path.is_symlink():
+            return False
+        if path.stat().st_size < len(SQLITE_MAGIC):
+            return False
+        return read_sqlite_header(path) == SQLITE_MAGIC
+    except OSError:
+        return False
+
+
+def find_sqlite_databases(root: Path) -> list[Path]:
+    """Find SQLite database files under a mounted directory.
+
+    A header check is used rather than a filename extension so files such as
+    ``data.db`` and extensionless databases are found.  Sidecars and symlinks
+    are skipped.  This is intentionally only used for the explicit
+    ``stack-back.sqlite: auto`` opt-in.
+    """
+
+    root = Path(root)
+    if not root.is_dir():
+        return []
+
+    databases = []
+    for dirpath, dirnames, filenames in os.walk(
+        root,
+        followlinks=False,
+        onerror=lambda ex: logger.debug("Could not scan %s: %s", root, ex),
+    ):
+        dirnames[:] = [
+            name for name in dirnames if not (Path(dirpath) / name).is_symlink()
+        ]
+        for name in filenames:
+            if name.endswith(SIDECAR_SUFFIXES):
+                continue
+            path = Path(dirpath) / name
+            if is_sqlite_file(path):
+                databases.append(path)
+
+    return sorted(databases)
+
+
 def validate_sqlite_file(database: Path) -> None:
     """Ensure ``database`` is a non-empty SQLite database file."""
 
@@ -274,10 +320,13 @@ def _check_database(
             )
 
 
-def _open_source(database: Path, busy_timeout: float) -> sqlite3.Connection:
-    """Open an existing database read-write without creating it."""
+def _open_source(
+    database: Path, busy_timeout: float, *, read_only: bool = False
+) -> sqlite3.Connection:
+    """Open an existing database without creating it."""
 
-    uri = database.as_uri() + "?mode=rw"
+    mode = "ro" if read_only else "rw"
+    uri = f"{database.as_uri()}?mode={mode}"
     connection = sqlite3.connect(uri, uri=True, timeout=busy_timeout)
     try:
         connection.execute(f"PRAGMA busy_timeout = {int(busy_timeout * 1000)}")
@@ -295,11 +344,13 @@ def export_database(
     busy_timeout: float = 30.0,
     verify: str = "quick",
     required_tables=(),
+    read_only: bool = False,
 ) -> None:
     """Copy ``source`` into ``destination`` using the online backup API.
 
-    The source is never created implicitly.  The destination is normalized to
-    rollback-journal mode and validated before returning.
+    The source is never created implicitly.  ``read_only=True`` opens the
+    source with ``mode=ro`` for the auto-detection path.  The destination is
+    normalized to rollback-journal mode and validated before returning.
     """
 
     source = Path(source)
@@ -316,7 +367,9 @@ def export_database(
     remove_sidecars(destination)
 
     try:
-        with closing(_open_source(source, busy_timeout)) as source_connection:
+        with closing(
+            _open_source(source, busy_timeout, read_only=read_only)
+        ) as source_connection:
             with closing(sqlite3.connect(str(destination))) as destination_connection:
                 source_connection.backup(destination_connection)
                 destination_connection.commit()

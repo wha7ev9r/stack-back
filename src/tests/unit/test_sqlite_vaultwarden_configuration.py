@@ -192,6 +192,30 @@ class SqliteVaultwardenConfigurationTests(BaseTestCase):
             handler = running.get_service("app").backup_handlers()[0]
             assert handler._mount_and_rel("/data/app.db") == (None, None)
 
+    def test_sqlite_auto_handler_is_cached(self):
+        containers = self.createContainers()
+        containers += [
+            {
+                "service": "app",
+                "labels": {"stack-back.sqlite": "auto"},
+                "mounts": [
+                    {
+                        "Source": "app_data",
+                        "Destination": "/data",
+                        "Type": "volume",
+                        "Name": "app_data",
+                    }
+                ],
+            }
+        ]
+        with mock.patch(
+            list_containers_func, fixtures.containers(containers=containers)
+        ):
+            running = RunningContainers()
+        service = running.get_service("app")
+        assert service.sqlite_auto_enabled
+        assert service.backup_handlers()[0] is service.backup_handlers()[0]
+
     def test_vaultwarden_handler_configuration(self):
         containers = self.createContainers()
         containers += [

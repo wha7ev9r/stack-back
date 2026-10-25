@@ -238,6 +238,62 @@ class PostgresContainer(Container):
 class SqliteContainer(Container):
     container_type = "sqlite"
 
+    _auto_paths = None
+
+    def _auto_mounts(self):
+        """Return ``(mount, read-only root)`` pairs for auto discovery."""
+        roots = []
+        exclude_bind = utils.is_true(config.exclude_bind_mounts)
+        for mount in self._mounts:
+            if mount.type not in ("volume", "bind"):
+                continue
+            if exclude_bind and mount.type == "bind":
+                continue
+            root = Path(sqlite_backup.sqlite_mount_target(mount.source))
+            if not root.is_dir():
+                continue
+            roots.append((mount, root))
+        return roots
+
+    def discover(self) -> list[str]:
+        """Find SQLite databases under this service's auto-mounted volumes."""
+        if not self.sqlite_auto_enabled:
+            return []
+        if self._auto_paths is not None:
+            return self._auto_paths
+
+        paths = []
+        roots = self._auto_mounts()
+        if not roots:
+            logger.error(
+                "SQLite auto-detection for service %s has no readable mounts; "
+                "check EXCLUDE_BIND_MOUNTS and that the service is running",
+                self.service_name,
+            )
+        for mount, root in roots:
+            for database in sqlite_backup.find_sqlite_databases(root):
+                relative = database.relative_to(root).as_posix()
+                path = posixpath.normpath(
+                    posixpath.join(mount.destination, relative)
+                )
+                if path not in paths:
+                    paths.append(path)
+
+        self._auto_paths = paths
+        if paths:
+            logger.info(
+                "Auto-detected %s SQLite database(s) in service %s: %s",
+                len(paths),
+                self.service_name,
+                ", ".join(paths),
+            )
+        else:
+            logger.error(
+                "SQLite auto-detection found no databases in service %s",
+                self.service_name,
+            )
+        return paths
+
     def _mount_and_rel(self, path: str):
         mount = self.mount_for_path(
             path,
@@ -291,6 +347,28 @@ class SqliteContainer(Container):
         return source
 
     def ping(self) -> bool:
+        if self.sqlite_auto_enabled:
+            exclude_bind = utils.is_true(config.exclude_bind_mounts)
+            mounts = [
+                mount
+                for mount in self._mounts
+                if mount.type in ("volume", "bind")
+                and not (exclude_bind and mount.type == "bind")
+            ]
+            if not mounts:
+                logger.error(
+                    "SQLite auto-detection is enabled for service %s but it has "
+                    "no usable volume/bind mounts",
+                    self.service_name,
+                )
+                return False
+            logger.info(
+                "SQLite auto-detection is enabled for service %s; databases will "
+                "be discovered with read-only mounts at backup time",
+                self.service_name,
+            )
+            return True
+
         if self.sqlite_path_errors:
             for error in self.sqlite_path_errors:
                 logger.error("Invalid stack-back.sqlite.paths entry: %s", error)
@@ -319,6 +397,33 @@ class SqliteContainer(Container):
 
     def dedicated_mounts(self) -> list:
         specs = {}
+        if self.sqlite_auto_enabled:
+            exclude_bind = utils.is_true(config.exclude_bind_mounts)
+            for mount in self._mounts:
+                if mount.type not in ("volume", "bind"):
+                    continue
+                if exclude_bind and mount.type == "bind":
+                    logger.error(
+                        "SQLite auto-detection for service %s includes a bind "
+                        "mount but EXCLUDE_BIND_MOUNTS is enabled",
+                        self.service_name,
+                    )
+                    continue
+                source = mount.name if mount.type == "volume" else mount.source
+                if not source:
+                    logger.error(
+                        "Could not determine source for SQLite auto mount %s", mount
+                    )
+                    continue
+                target = sqlite_backup.sqlite_mount_target(mount.source)
+                specs[(mount.type, source, target)] = {
+                    "type": mount.type,
+                    "source": source,
+                    "target": target,
+                    "read_only": True,
+                }
+            return list(specs.values())
+
         for path in self.sqlite_paths:
             mount, _relative = self._mount_and_rel(path)
             if mount is None:
@@ -327,16 +432,21 @@ class SqliteContainer(Container):
             if not source:
                 logger.error("Could not determine source for SQLite mount %s", mount)
                 continue
-            specs[(mount.type, source)] = {
+            target = sqlite_backup.sqlite_mount_target(mount.source)
+            specs[(mount.type, source, target)] = {
                 "type": mount.type,
                 "source": source,
-                "target": sqlite_backup.sqlite_mount_target(mount.source),
+                "target": target,
+                "read_only": False,
             }
         return list(specs.values())
 
     def volume_exclude_targets(self) -> list:
         targets = {}
-        for path in self.sqlite_paths:
+        paths = self._auto_paths if self.sqlite_auto_enabled else self.sqlite_paths
+        if paths is None:
+            return []
+        for path in paths:
             mount, relative = self._mount_and_rel(path)
             if mount is None:
                 continue
@@ -352,7 +462,10 @@ class SqliteContainer(Container):
         if utils.is_true(config.include_project_name) and self.project_name:
             destination /= self.project_name
         destination /= self.service_name
-        return [destination / utils.strip_root(path) for path in self.sqlite_paths]
+        paths = self._auto_paths if self.sqlite_auto_enabled else self.sqlite_paths
+        if paths is None:
+            return []
+        return [destination / utils.strip_root(path) for path in paths]
 
     def backup_destination_path(self) -> str:
         destinations = self.backup_destination_paths()
@@ -366,19 +479,26 @@ class SqliteContainer(Container):
             for error in self.sqlite_path_errors:
                 logger.error("Invalid stack-back.sqlite.paths entry: %s", error)
             return 1
-        if not self.sqlite_paths:
-            logger.error(
-                "stack-back.sqlite is enabled for service %s but no paths are configured",
-                self.service_name,
-            )
-            return 1
+
+        if self.sqlite_auto_enabled:
+            paths = self.discover()
+            if not paths:
+                return 1
+        else:
+            paths = self.sqlite_paths
+            if not paths:
+                logger.error(
+                    "stack-back.sqlite is enabled for service %s but no paths are configured",
+                    self.service_name,
+                )
+                return 1
 
         temp_root = Path(config.sqlite_temp_dir)
         temp_root.mkdir(parents=True, exist_ok=True)
         result = 0
         workdir = Path(tempfile.mkdtemp(prefix="rcb-sqlite-", dir=temp_root))
         try:
-            for index, path in enumerate(self.sqlite_paths):
+            for index, path in enumerate(paths):
                 destination = workdir / f"{index:03d}.db"
                 try:
                     source = self._source_path(path)
@@ -393,6 +513,7 @@ class SqliteContainer(Container):
                         destination,
                         busy_timeout=_config_float("sqlite_busy_timeout", 30.0),
                         verify="quick",
+                        read_only=self.sqlite_auto_enabled,
                     )
                     exit_code = restic.backup_stdin_file(
                         local_config.repository,

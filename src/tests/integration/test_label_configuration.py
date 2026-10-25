@@ -115,6 +115,7 @@ def test_services_without_labels_not_backed_up(run_rcb_command):
         "postgres",
         "sqlite",
         "sqlite_only",
+        "sqlite_auto",
         "vaultwarden",
         "vaultwarden_consistent",
         "backup",

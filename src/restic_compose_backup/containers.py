@@ -39,8 +39,16 @@ class Container:
         self._exclude = self._parse_pattern(self.get_label(enums.LABEL_VOLUMES_EXCLUDE))
 
     def backup_handlers(self) -> list:
-        """list: Get service specific backup handlers for this container."""
+        """list: Get service specific backup handlers for this container.
+
+        The handlers are cached so discovery state (for SQLite auto mode)
+        survives between exclude generation and the actual backup.
+        """
         from restic_compose_backup import containers_db
+
+        cached = getattr(self, "_backup_handler_cache", None)
+        if cached is not None:
+            return cached
 
         if self.vaultwarden_backup_enabled:
             if self.sqlite_backup_enabled or self.database_backup_enabled:
@@ -49,7 +57,10 @@ class Container:
                     "the dedicated Vaultwarden backup takes precedence",
                     self.service_name,
                 )
-            return [containers_db.VaultwardenContainer(self._data)]
+            self._backup_handler_cache = [
+                containers_db.VaultwardenContainer(self._data)
+            ]
+            return self._backup_handler_cache
 
         handlers = []
         if self.mariadb_backup_enabled:
@@ -60,6 +71,7 @@ class Container:
             handlers.append(containers_db.PostgresContainer(self._data))
         if self.sqlite_backup_enabled:
             handlers.append(containers_db.SqliteContainer(self._data))
+        self._backup_handler_cache = handlers
         return handlers
 
     @property
@@ -184,8 +196,16 @@ class Container:
         )
 
     @property
+    def sqlite_auto_enabled(self) -> bool:
+        """bool: If ``stack-back.sqlite`` is set to ``auto``."""
+        value = self.get_label(enums.LABEL_SQLITE_ENABLED)
+        return isinstance(value, str) and value.strip().lower() == "auto"
+
+    @property
     def sqlite_paths(self) -> List[str]:
         """list: Configured absolute SQLite database paths."""
+        if self.sqlite_auto_enabled:
+            return []
         paths, _errors = sqlite_backup.normalize_sqlite_paths(
             self.get_label(enums.LABEL_SQLITE_PATHS)
         )
@@ -194,6 +214,8 @@ class Container:
     @property
     def sqlite_path_errors(self) -> List[str]:
         """list: Invalid entries in ``stack-back.sqlite.paths``."""
+        if self.sqlite_auto_enabled:
+            return []
         _paths, errors = sqlite_backup.normalize_sqlite_paths(
             self.get_label(enums.LABEL_SQLITE_PATHS)
         )
@@ -201,8 +223,11 @@ class Container:
 
     @property
     def sqlite_backup_enabled(self) -> bool:
-        """bool: If ``stack-back.sqlite`` is enabled."""
-        return utils.is_true(self.get_label(enums.LABEL_SQLITE_ENABLED))
+        """bool: If ``stack-back.sqlite`` is enabled (paths or auto)."""
+        return (
+            utils.is_true(self.get_label(enums.LABEL_SQLITE_ENABLED))
+            or self.sqlite_auto_enabled
+        )
 
     @property
     def vaultwarden_backup_enabled(self) -> bool:
@@ -626,7 +651,14 @@ class RunningContainers:
                     continue
                 for spec in handler_specs:
                     key = (spec["type"], spec["source"], spec["target"])
-                    specs[key] = spec
+                    spec.setdefault("read_only", False)
+                    if key in specs:
+                        # A read-write mount is needed if any handler shares it.
+                        specs[key]["read_only"] = (
+                            specs[key]["read_only"] and spec["read_only"]
+                        )
+                    else:
+                        specs[key] = spec
 
         result = []
         for spec in specs.values():
@@ -635,10 +667,26 @@ class RunningContainers:
                     target=spec["target"],
                     source=spec["source"],
                     type=spec["type"],
-                    read_only=False,
+                    read_only=spec.get("read_only", False),
                 )
             )
         return result
+
+    def discover_auto_sqlite(self) -> None:
+        """Discover SQLite files for handlers using service-level auto mode."""
+        for container in self.containers_for_backup():
+            for handler in container.backup_handlers():
+                if not getattr(handler, "sqlite_auto_enabled", False):
+                    continue
+                try:
+                    handler.discover()
+                except Exception as ex:
+                    logger.error(
+                        "Could not auto-detect SQLite databases for %s in service %s: %s",
+                        handler.container_type,
+                        container.service_name,
+                        ex,
+                    )
 
     def generate_volume_snapshot_excludes(self) -> list:
         """Generate restic exclude patterns for raw SQLite/Vaultwarden data."""
