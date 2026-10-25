@@ -1,9 +1,12 @@
 import logging
+import posixpath
 from pathlib import Path
 import socket
 from typing import List
 
-from restic_compose_backup import enums, utils
+from docker.types import Mount as DockerMount
+
+from restic_compose_backup import enums, sqlite_backup, utils, vaultwarden
 from restic_compose_backup.config import config
 
 logger = logging.getLogger(__name__)
@@ -35,21 +38,35 @@ class Container:
         self._include = self._parse_pattern(self.get_label(enums.LABEL_VOLUMES_INCLUDE))
         self._exclude = self._parse_pattern(self.get_label(enums.LABEL_VOLUMES_EXCLUDE))
 
+    def backup_handlers(self) -> list:
+        """list: Get service specific backup handlers for this container."""
+        from restic_compose_backup import containers_db
+
+        if self.vaultwarden_backup_enabled:
+            if self.sqlite_backup_enabled or self.database_backup_enabled:
+                logger.warning(
+                    "Service %s has Vaultwarden and other database labels; "
+                    "the dedicated Vaultwarden backup takes precedence",
+                    self.service_name,
+                )
+            return [containers_db.VaultwardenContainer(self._data)]
+
+        handlers = []
+        if self.mariadb_backup_enabled:
+            handlers.append(containers_db.MariadbContainer(self._data))
+        if self.mysql_backup_enabled:
+            handlers.append(containers_db.MysqlContainer(self._data))
+        if self.postgresql_backup_enabled:
+            handlers.append(containers_db.PostgresContainer(self._data))
+        if self.sqlite_backup_enabled:
+            handlers.append(containers_db.SqliteContainer(self._data))
+        return handlers
+
     @property
     def instance(self) -> "Container":
-        """Container: Get a service specific subclass instance"""
-        # TODO: Do this smarter in the future (simple registry)
-        if self.database_backup_enabled:
-            from restic_compose_backup import containers_db
-
-            if self.mariadb_backup_enabled:
-                return containers_db.MariadbContainer(self._data)
-            if self.mysql_backup_enabled:
-                return containers_db.MysqlContainer(self._data)
-            if self.postgresql_backup_enabled:
-                return containers_db.PostgresContainer(self._data)
-        else:
-            return self
+        """Container: Get the first service specific handler (compat helper)."""
+        handlers = self.backup_handlers()
+        return handlers[0] if handlers else self
 
     @property
     def id(self) -> str:
@@ -140,6 +157,8 @@ class Container:
             [
                 self.volume_backup_enabled,
                 self.database_backup_enabled,
+                self.sqlite_backup_enabled,
+                self.vaultwarden_backup_enabled,
             ]
         )
 
@@ -163,6 +182,54 @@ class Container:
                 self.postgresql_backup_enabled,
             ]
         )
+
+    @property
+    def sqlite_paths(self) -> List[str]:
+        """list: Configured absolute SQLite database paths."""
+        paths, _errors = sqlite_backup.normalize_sqlite_paths(
+            self.get_label(enums.LABEL_SQLITE_PATHS)
+        )
+        return paths
+
+    @property
+    def sqlite_path_errors(self) -> List[str]:
+        """list: Invalid entries in ``stack-back.sqlite.paths``."""
+        _paths, errors = sqlite_backup.normalize_sqlite_paths(
+            self.get_label(enums.LABEL_SQLITE_PATHS)
+        )
+        return errors
+
+    @property
+    def sqlite_backup_enabled(self) -> bool:
+        """bool: If ``stack-back.sqlite`` is enabled."""
+        return utils.is_true(self.get_label(enums.LABEL_SQLITE_ENABLED))
+
+    @property
+    def vaultwarden_backup_enabled(self) -> bool:
+        """bool: If ``stack-back.vaultwarden`` is enabled."""
+        return utils.is_true(self.get_label(enums.LABEL_VAULTWARDEN_ENABLED))
+
+    @property
+    def vaultwarden_mode(self) -> str:
+        """str: Vaultwarden backup mode (online/consistent)."""
+        try:
+            return vaultwarden.parse_mode(self.get_label(enums.LABEL_VAULTWARDEN_MODE))
+        except vaultwarden.VaultwardenConfigError as ex:
+            logger.error(
+                "Invalid Vaultwarden mode for service %s: %s",
+                self.service_name,
+                ex,
+            )
+            return vaultwarden.VAULTWARDEN_MODE_ONLINE
+
+    @property
+    def vaultwarden_icon_cache_enabled(self) -> bool:
+        return utils.is_true(self.get_label(enums.LABEL_VAULTWARDEN_ICON_CACHE))
+
+    @property
+    def vaultwarden_data_dir_override(self):
+        value = self.get_label(enums.LABEL_VAULTWARDEN_DATA_DIR)
+        return value if isinstance(value, str) and value.strip() else None
 
     @property
     def mysql_backup_enabled(self) -> bool:
@@ -198,10 +265,17 @@ class Container:
 
     @property
     def stop_during_backup(self) -> bool:
-        """bool: If the ``stack-back.volumes.stop-during-backup`` label is set"""
+        """bool: If the ``stack-back.volumes.stop-during-backup`` label is set.
+
+        Server databases keep running (their dump tools are online).  SQLite
+        can opt in as a fallback for exclusive locks.  Vaultwarden manages
+        stopping itself in ``consistent`` mode, so the generic stop must not
+        interfere.
+        """
         return (
             utils.is_true(self.get_label(enums.LABEL_STOP_DURING_BACKUP))
             and not self.database_backup_enabled
+            and not self.vaultwarden_backup_enabled
         )
 
     @property
@@ -295,6 +369,18 @@ class Container:
         destination /= Path(utils.strip_root(mount.destination))
 
         return str(destination)
+
+    def mount_for_path(self, path: str, exclude_bind_mounts: bool = False):
+        """Return the most specific volume/bind mount containing ``path``."""
+        return sqlite_backup.find_mount_for_path(
+            path,
+            self._mounts,
+            exclude_bind_mounts=exclude_bind_mounts,
+        )
+
+    def backup_destination_paths(self) -> list:
+        """Return all restic destination paths for this backup handler."""
+        return [self.backup_destination_path()]
 
     def get_credentials(self) -> dict:
         """dict: get credentials for the service"""
@@ -395,6 +481,44 @@ class Mount:
             raise ValueError("Unknown volume type: {}".format(self.type))
 
 
+def _target_relative_in_mount(
+    target_source: str, target_rel: str, mount_source: str
+) -> str | None:
+    """Map a source-relative backup target into a volume mount.
+
+    ``target_source`` is the Docker mount source that contains the database or
+    data directory.  ``mount_source`` is another mount source which may be the
+    same path, an ancestor, or a descendant.  The returned path is relative to
+    the mounted source and can be appended to the volume backup destination.
+    """
+
+    target_source = posixpath.normpath(target_source)
+    mount_source = posixpath.normpath(mount_source)
+    target_rel = posixpath.normpath(target_rel) if target_rel else ""
+
+    if target_source == mount_source:
+        return target_rel
+
+    if target_source.startswith(mount_source.rstrip("/") + "/"):
+        prefix = target_source[len(mount_source.rstrip("/")) + 1 :]
+        return posixpath.join(prefix, target_rel) if target_rel else prefix
+
+    if mount_source.startswith(target_source.rstrip("/") + "/"):
+        mount_rel = mount_source[len(target_source.rstrip("/")) + 1 :]
+        if target_rel == "":
+            # The mount is somewhere inside the target directory.
+            return ""
+        if target_rel == mount_rel:
+            return ""
+        if target_rel.startswith(mount_rel.rstrip("/") + "/"):
+            return target_rel[len(mount_rel.rstrip("/")) + 1 :]
+        if mount_rel.startswith(target_rel.rstrip("/") + "/"):
+            # This mount is inside the target; exclude its root.
+            return ""
+
+    return None
+
+
 class RunningContainers:
     def __init__(self):
         all_containers = utils.list_containers()
@@ -484,6 +608,87 @@ class RunningContainers:
                 )
 
         return mounts
+
+    def generate_dedicated_mounts(self) -> list:
+        """Generate extra read-write mounts for SQLite/Vaultwarden handlers."""
+        specs = {}
+        for container in self.containers_for_backup():
+            for handler in container.backup_handlers():
+                try:
+                    handler_specs = handler.dedicated_mounts()
+                except Exception as ex:
+                    logger.error(
+                        "Could not prepare dedicated mounts for %s in service %s: %s",
+                        handler.container_type,
+                        container.service_name,
+                        ex,
+                    )
+                    continue
+                for spec in handler_specs:
+                    key = (spec["type"], spec["source"], spec["target"])
+                    specs[key] = spec
+
+        result = []
+        for spec in specs.values():
+            result.append(
+                DockerMount(
+                    target=spec["target"],
+                    source=spec["source"],
+                    type=spec["type"],
+                    read_only=False,
+                )
+            )
+        return result
+
+    def generate_volume_snapshot_excludes(self) -> list:
+        """Generate restic exclude patterns for raw SQLite/Vaultwarden data."""
+        targets = []
+        for container in self.containers_for_backup():
+            for handler in container.backup_handlers():
+                try:
+                    targets.extend(handler.volume_exclude_targets())
+                except Exception as ex:
+                    logger.error(
+                        "Could not prepare volume excludes for %s in service %s: %s",
+                        handler.container_type,
+                        container.service_name,
+                        ex,
+                    )
+
+        patterns = []
+        for container in self.containers_for_backup():
+            if not container.volume_backup_enabled:
+                continue
+            for mount in container.filter_mounts():
+                for target in targets:
+                    relative = _target_relative_in_mount(
+                        target["source"],
+                        target["rel"],
+                        mount.source,
+                    )
+                    if relative is None:
+                        continue
+                    destination = Path(
+                        container.get_volume_backup_destination(mount, "/volumes")
+                    )
+                    raw_path = destination if relative == "" else destination / relative
+                    escaped = sqlite_backup.escape_restic_pattern(str(raw_path))
+                    if target["kind"] == "dir":
+                        if escaped not in patterns:
+                            patterns.append(escaped)
+                    else:
+                        for pattern in (
+                            escaped,
+                            escaped + "-wal",
+                            escaped + "-shm",
+                            escaped + "-journal",
+                        ):
+                            if pattern not in patterns:
+                                patterns.append(pattern)
+                        master = escaped + "-mj*"
+                        if master not in patterns:
+                            patterns.append(master)
+        return patterns
 
     def get_service(self, name) -> Container:
         """Container: Get a service by name"""

@@ -19,6 +19,18 @@ This directory contains integration tests for stack-back that use real Docker co
 - Incremental backups after changes
 - Database health checks
 
+### SQLite Backups (`test_sqlite_backup.py`)
+- Live WAL database backup through the online backup API
+- Idle WAL database with no `-wal`/`-shm` sidecars
+- Raw database/sidecar exclusion from the `/volumes` snapshot
+- Restoring and opening the exported database read-only
+
+### Vaultwarden Backups (`test_vaultwarden_backup.py`)
+- Default online mode does not restart Vaultwarden
+- Single snapshot containing database, attachments, sends, config and RSA keys
+- Temporary files and icon cache excluded
+- Optional consistent mode stops and restarts the service
+
 ### Label Configuration (`test_label_configuration.py`)
 - Volume include patterns (`stack-back.volumes.include`)
 - Volume exclude patterns (`stack-back.volumes.exclude`)

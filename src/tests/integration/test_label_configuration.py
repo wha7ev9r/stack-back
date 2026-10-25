@@ -108,7 +108,17 @@ def test_services_without_labels_not_backed_up(run_rcb_command):
     service_names = [line.split("service:")[1].strip() for line in lines]
 
     # All services in the list should be ones we explicitly labeled
-    expected_services = ["web", "mysql", "mariadb", "postgres", "backup"]
+    expected_services = [
+        "web",
+        "mysql",
+        "mariadb",
+        "postgres",
+        "sqlite",
+        "sqlite_only",
+        "vaultwarden",
+        "vaultwarden_consistent",
+        "backup",
+    ]
     for service in service_names:
         assert service in expected_services, (
             f"Unexpected service '{service}' in backup list"

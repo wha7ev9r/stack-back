@@ -12,6 +12,7 @@ WORKDIR /restic-compose-backup
 RUN uv python install $(cat .python-version)
 RUN uv sync --locked
 ENV PATH="/restic-compose-backup/.venv/bin:${PATH}"
+RUN python -c "import sqlite3; assert hasattr(sqlite3.Connection, 'backup')"
 
 ENV XDG_CACHE_HOME=/cache
 

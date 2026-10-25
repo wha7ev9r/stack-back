@@ -226,6 +226,10 @@ Database detection is based on the default images for mariadb, mysql
 and postgres. When a database is detected, the volume associated with 
 the database data is automatically excluded from the backup.
 
+SQLite and Vaultwarden are **not** enabled by ``AUTO_BACKUP_ALL``: SQLite
+needs explicit paths, and Vaultwarden has an online/consistent mode choice.
+Use the ``stack-back.sqlite`` or ``stack-back.vaultwarden`` labels.
+
 Volumes can be excluded by adding the ``stack-back.volumes.exclude: <volume_name>``
 or ``stack-back.volumes: False`` label to the service.
 
@@ -329,11 +333,12 @@ Their path in restic will be:
 - /volumes/myservice/srv/files
 - /volumes/myservice/srv/data
 
-In situations where the files in the volume are at risk of being
-corrupted during the backup process (such as SQLite databases), 
-the `stack-back.volumes.stop-during-backup` label can be added to 
-the service. This will stop the service during the backup process 
-and start it again when the backup is done.
+For SQLite databases use the ``stack-back.sqlite`` labels or the
+dedicated :doc:`vaultwarden` integration instead of relying on a raw
+volume copy.  ``stack-back.volumes.stop-during-backup`` remains available
+as a fallback for services that cannot be backed up online (for example a
+SQLite application holding an exclusive lock).  It stops the service during
+the whole backup and starts it again when the backup is done.
 
 Example:
 
@@ -401,6 +406,63 @@ Exclude example achieving the same result as the example above.
 
 The ``exclude`` and ``include`` tag can be used together
 in more complex situations.
+
+sqlite
+~~~~~~
+
+SQLite databases can be backed up online with the official SQLite backup
+API.  Add the database paths inside the container:
+
+.. code:: yaml
+
+    myservice:
+      image: some_image
+      labels:
+        stack-back.sqlite: true
+        stack-back.sqlite.paths: "/data/app.db,/data/cache.db"
+      volumes:
+        - app_data:/data
+
+The paths must be absolute, comma-separated and located on a directory
+volume or bind mount.  Glob patterns and single-file bind mounts are not
+supported.  SQLite is never auto-detected and ``AUTO_BACKUP_ALL`` does not
+enable it.
+
+Each database is exported with SQLite's online backup API
+(``sqlite3.Connection.backup``), converted to rollback-journal mode and
+stored as a separate snapshot:
+
+.. code:: text
+
+    /databases/<service_name>/<container path without leading slash>
+
+For example ``/data/app.db`` becomes
+``/databases/myservice/data/app.db``.  Multiple databases produce multiple
+snapshots and do not provide cross-database atomicity.
+
+When the same service also has volume backup enabled, the original database
+file and its ``-wal``/``-shm``/``-journal`` files are excluded from the
+``/volumes`` snapshot, including paths exposed by other services through a
+shared or parent bind mount.  A SQLite-only service does not back up other
+files in the volume; add ``stack-back.volumes: true`` for those.
+
+The export requires temporary space roughly equal to the largest database in
+the backup process container.  SQLite WAL requires a local POSIX filesystem
+and a single host; NFS/SMB and other network filesystems are not supported.
+SQLCipher/encrypted databases and custom SQLite VFS implementations are not
+supported.
+
+If ``EXCLUDE_BIND_MOUNTS`` is enabled and a configured database lives on a
+bind mount, the backup fails instead of silently skipping the database.
+
+If the application opens the database with an exclusive lock, add
+``stack-back.volumes.stop-during-backup: true`` as a fallback.  The backup
+process mounts the database volume read-write because SQLite may need to
+create/remove ``-shm``/``-wal`` files and may perform crash recovery.
+
+Restore by stopping the service, restoring the database snapshot, deleting
+the target ``-wal``/``-shm``/``-journal`` files, fixing ownership and
+starting the service again.
 
 mariadb
 ~~~~~~~

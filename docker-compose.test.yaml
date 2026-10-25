@@ -45,6 +45,14 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      sqlite:
+        condition: service_healthy
+      sqlite_only:
+        condition: service_healthy
+      vaultwarden:
+        condition: service_healthy
+      vaultwarden_consistent:
+        condition: service_healthy
 
   web:
     image: nginx:alpine
@@ -113,6 +121,144 @@ services:
       timeout: 3s
       retries: 10
 
+  sqlite:
+    image: python:3.13-alpine
+    labels:
+      stack-back.sqlite: "true"
+      stack-back.sqlite.paths: "/data/app.db"
+      stack-back.volumes: "true"
+    volumes:
+      - sqlite_data:/data
+    command:
+      - python
+      - -c
+      - |
+        import pathlib, sqlite3, time
+        pathlib.Path("/data/keep.txt").write_text("keep")
+        con = sqlite3.connect("/data/app.db")
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, note TEXT)")
+        con.execute("INSERT INTO events (note) VALUES ('seed')")
+        con.commit()
+        pathlib.Path("/tmp/ready").touch()
+        while True:
+            con.execute("INSERT INTO events (note) VALUES ('tick')")
+            con.commit()
+            time.sleep(0.5)
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks:
+      - test-network
+
+  sqlite_only:
+    image: python:3.13-alpine
+    labels:
+      stack-back.sqlite: "true"
+      stack-back.sqlite.paths: "/data/only.db"
+    volumes:
+      - sqlite_only_data:/data
+    command:
+      - python
+      - -c
+      - |
+        import pathlib, sqlite3, time
+        con = sqlite3.connect("/data/only.db")
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("CREATE TABLE IF NOT EXISTS items (value TEXT)")
+        con.execute("INSERT INTO items (value) VALUES ('idle')")
+        con.commit()
+        con.close()
+        pathlib.Path("/tmp/ready").touch()
+        while True:
+            time.sleep(60)
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks:
+      - test-network
+
+  vaultwarden:
+    image: python:3.13-alpine
+    labels:
+      stack-back.vaultwarden: "true"
+      stack-back.volumes: "true"
+    volumes:
+      - vaultwarden_data:/data
+    command:
+      - python
+      - -c
+      - |
+        import json, pathlib, sqlite3, time
+        data = pathlib.Path("/data")
+        data.mkdir(exist_ok=True)
+        con = sqlite3.connect("/data/db.sqlite3")
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("CREATE TABLE IF NOT EXISTS users (uuid TEXT PRIMARY KEY, email TEXT)")
+        con.execute("CREATE TABLE IF NOT EXISTS __diesel_schema_migrations (version TEXT PRIMARY KEY)")
+        con.execute("INSERT OR IGNORE INTO users VALUES ('user-1', 'vaultwarden@example.invalid')")
+        con.commit()
+        (data / "attachments" / "cipher-1").mkdir(parents=True, exist_ok=True)
+        (data / "attachments" / "cipher-1" / "attachment-1").write_bytes(b"attachment-data")
+        (data / "sends" / "send-1").mkdir(parents=True, exist_ok=True)
+        (data / "sends" / "send-1" / "file-1").write_bytes(b"send-data")
+        (data / "config.json").write_text(json.dumps({"domain": "https://vw.invalid"}))
+        (data / "rsa_key.pem").write_text("dummy-private-key")
+        (data / "rsa_key.pub.pem").write_text("dummy-public-key")
+        (data / "tmp").mkdir(exist_ok=True)
+        (data / "tmp" / "upload.tmp").write_text("temporary")
+        (data / "icon_cache").mkdir(exist_ok=True)
+        (data / "icon_cache" / "example.com.png").write_bytes(b"icon")
+        pathlib.Path("/tmp/ready").touch()
+        while True:
+            time.sleep(60)
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks:
+      - test-network
+
+  vaultwarden_consistent:
+    image: python:3.13-alpine
+    labels:
+      stack-back.vaultwarden: "true"
+      stack-back.vaultwarden.mode: "consistent"
+    volumes:
+      - vaultwarden_consistent_data:/data
+    command:
+      - python
+      - -c
+      - |
+        import json, pathlib, sqlite3, time
+        data = pathlib.Path("/data")
+        data.mkdir(exist_ok=True)
+        con = sqlite3.connect("/data/db.sqlite3")
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("CREATE TABLE IF NOT EXISTS users (uuid TEXT PRIMARY KEY, email TEXT)")
+        con.execute("CREATE TABLE IF NOT EXISTS __diesel_schema_migrations (version TEXT PRIMARY KEY)")
+        con.execute("INSERT OR IGNORE INTO users VALUES ('user-2', 'consistent@example.invalid')")
+        con.commit()
+        (data / "attachments").mkdir(exist_ok=True)
+        (data / "config.json").write_text(json.dumps({"domain": "https://vw.invalid"}))
+        (data / "rsa_key.pem").write_text("dummy-private-key")
+        (data / "rsa_key.pub.pem").write_text("dummy-public-key")
+        pathlib.Path("/tmp/ready").touch()
+        while True:
+            time.sleep(60)
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks:
+      - test-network
+
   # Service to test exclude patterns
   excluded_service:
     image: alpine:latest
@@ -129,6 +275,10 @@ volumes:
   mysql_data:
   mariadb_data:
   postgres_data:
+  sqlite_data:
+  sqlite_only_data:
+  vaultwarden_data:
+  vaultwarden_consistent_data:
   excluded_data:
 
 networks:

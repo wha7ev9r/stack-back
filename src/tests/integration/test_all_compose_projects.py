@@ -252,7 +252,7 @@ def test_project_name_in_backup_path_with_all_projects(
     # The backup should have project-specific paths
     # We can verify this by restoring and checking the path structure
     exit_code, output = backup_container_with_multi_project.exec_run(
-        "restic restore latest --target /restore"
+        "restic restore latest --target /restore --path /volumes"
     )
     assert exit_code == 0, f"Restore failed: {output.decode()}"
 

@@ -270,6 +270,42 @@ def web_container(docker_client, compose_project_name, compose_up):
     raise RuntimeError("Web container not found")
 
 
+def _container_by_service(docker_client, project_name, service_name):
+    containers = docker_client.containers.list(
+        filters={"label": f"com.docker.compose.project={project_name}"}
+    )
+    for container in containers:
+        if container.labels.get("com.docker.compose.service") == service_name:
+            return container
+    raise RuntimeError(f"Container for service {service_name} not found")
+
+
+@pytest.fixture
+def sqlite_container(docker_client, compose_project_name, compose_up):
+    """Return the live-WAL SQLite container."""
+    return _container_by_service(docker_client, compose_project_name, "sqlite")
+
+
+@pytest.fixture
+def sqlite_only_container(docker_client, compose_project_name, compose_up):
+    """Return the idle-WAL SQLite-only container."""
+    return _container_by_service(docker_client, compose_project_name, "sqlite_only")
+
+
+@pytest.fixture
+def vaultwarden_container(docker_client, compose_project_name, compose_up):
+    """Return the fake Vaultwarden online-mode container."""
+    return _container_by_service(docker_client, compose_project_name, "vaultwarden")
+
+
+@pytest.fixture
+def vaultwarden_consistent_container(docker_client, compose_project_name, compose_up):
+    """Return the fake Vaultwarden consistent-mode container."""
+    return _container_by_service(
+        docker_client, compose_project_name, "vaultwarden_consistent"
+    )
+
+
 @pytest.fixture(scope="session")
 def secondary_compose_project_name():
     """Return a unique name for the secondary test compose project"""

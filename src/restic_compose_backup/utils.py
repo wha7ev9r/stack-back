@@ -90,6 +90,50 @@ def start_containers(containers: List["Container"]):
             logger.exception(ex)
 
 
+def container_is_running(container_id: str) -> bool:
+    """Return whether the container is currently running."""
+
+    client = docker_client()
+    try:
+        container = client.containers.get(container_id)
+        return container.status == "running"
+    except Exception as ex:
+        logger.error("Could not inspect container %s: %s", container_id, ex)
+        return False
+    finally:
+        client.close()
+
+
+def stop_container(container_id: str, timeout: float = 30.0) -> bool:
+    """Gracefully stop a container.  Returns success."""
+
+    client = docker_client()
+    try:
+        container = client.containers.get(container_id)
+        container.stop(timeout=int(timeout))
+        return True
+    except Exception as ex:
+        logger.error("Could not stop container %s: %s", container_id, ex)
+        return False
+    finally:
+        client.close()
+
+
+def start_container(container_id: str) -> bool:
+    """Start a container.  Returns success."""
+
+    client = docker_client()
+    try:
+        container = client.containers.get(container_id)
+        container.start()
+        return True
+    except Exception as ex:
+        logger.error("Could not start container %s: %s", container_id, ex)
+        return False
+    finally:
+        client.close()
+
+
 def is_true(value):
     """
     Evaluates the truthfullness of a bool value in container labels

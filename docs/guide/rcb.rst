@@ -57,6 +57,11 @@ Example output::
     INFO:  - mariadb (is_ready=True)
     INFO: service: postgres
     INFO:  - postgres (is_ready=True)
+    INFO: service: app
+    INFO:  - sqlite (is_ready=True) -> /databases/app/data/app.db
+    INFO: service: vaultwarden
+    INFO:  - vaultwarden (is_ready=True) -> /vaultwarden/vaultwarden
+    INFO:  - vaultwarden mode: online
     INFO: service: web
     INFO:  - volume: media
     INFO:  - volume: /srv/files
@@ -89,8 +94,10 @@ Example output::
     7a642f37  2019-12-09 02:07:45  b3038db04ec1              /databases/mysql/all_databases.sql
     883dada4  2019-12-09 02:07:46  b3038db04ec1              /databases/mariadb/all_databases.sql
     76ef2457  2019-12-09 02:07:47  b3038db04ec1              /databases/postgres/test.sql
+    aabbccdd  2019-12-09 02:07:48  b3038db04ec1              /databases/app/data/app.db
+    eeff0011  2019-12-09 02:07:49  b3038db04ec1              /vaultwarden/vaultwarden
     ---------------------------------------------------------------------------------------------
-    4 snapshots
+    6 snapshots
 
 backup
 ~~~~~~

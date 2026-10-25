@@ -45,6 +45,17 @@ class Config:
             os.environ.get("AUTO_BACKUP_ALL") or self.include_all_volumes
         )
 
+        # SQLite / Vaultwarden
+        self.sqlite_busy_timeout = os.environ.get("SQLITE_BUSY_TIMEOUT") or "30"
+        self.sqlite_temp_dir = os.environ.get("SQLITE_TEMP_DIR") or "/tmp"
+        self.vaultwarden_staging_dir = (
+            os.environ.get("VAULTWARDEN_STAGING_DIR") or "/vaultwarden"
+        )
+        self.vaultwarden_stop_timeout = (
+            os.environ.get("VAULTWARDEN_STOP_TIMEOUT") or "30"
+        )
+        self.vaultwarden_state_dir = os.environ.get("VAULTWARDEN_STATE_DIR") or ""
+
         # Log
         self.log_level = os.environ.get("LOG_LEVEL")
 

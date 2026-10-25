@@ -1,6 +1,9 @@
 import argparse
+import json
 import os
 import logging
+import signal
+from pathlib import Path
 
 from restic_compose_backup import (
     alerts,
@@ -27,6 +30,8 @@ def main():
         containers.this_container.set_config_env("LOG_LEVEL", args.log_level)
 
     if args.action == "status":
+        if not utils.is_true(os.environ.get("BACKUP_PROCESS_CONTAINER")):
+            recover_vaultwarden_intents(config)
         status(config, containers)
 
     elif args.action == "snapshots":
@@ -120,15 +125,53 @@ def status(config, containers):
                     container.get_volume_backup_destination(mount, "/volumes"),
                 )
 
-        if container.database_backup_enabled:
-            instance = container.instance
+        for instance in container.backup_handlers():
             ping = instance.ping()
-            logger.info(
-                " - %s (is_ready=%s) -> %s",
-                instance.container_type,
-                ping,
-                instance.backup_destination_path(),
-            )
+            try:
+                destinations = instance.backup_destination_paths()
+            except Exception as ex:
+                logger.error(
+                    "Could not determine backup destination for %s in service %s: %s",
+                    instance.container_type,
+                    container.service_name,
+                    ex,
+                )
+                destinations = []
+            if not destinations:
+                destinations = [None]
+            for destination in destinations:
+                logger.info(
+                    " - %s (is_ready=%s) -> %s",
+                    instance.container_type,
+                    ping,
+                    destination if destination is not None else "<not configured>",
+                )
+            if instance.container_type == "vaultwarden":
+                logger.info(
+                    " - vaultwarden mode: %s",
+                    container.vaultwarden_mode,
+                )
+                try:
+                    vw_paths = instance.resolved_paths()
+                    logger.info(" - vaultwarden data: %s", vw_paths.data_dir)
+                    logger.info(" - vaultwarden db: %s", vw_paths.db_path)
+                    logger.info(
+                        " - vaultwarden attachments/sends: %s , %s",
+                        vw_paths.attachments,
+                        vw_paths.sends,
+                    )
+                except Exception as ex:
+                    logger.error(
+                        "Could not resolve Vaultwarden paths for service %s: %s",
+                        container.service_name,
+                        ex,
+                    )
+                if container.vaultwarden_mode == "consistent":
+                    logger.warning(
+                        " - consistent mode stops Vaultwarden during the local "
+                        "staging copy; required staging space is about the size "
+                        "of its data directory"
+                    )
             if not ping:
                 logger.error(
                     "Database '%s' in service %s cannot be reached",
@@ -142,8 +185,98 @@ def status(config, containers):
     logger.info("-" * 67)
 
 
+def _vaultwarden_state_dir(config):
+    candidates = []
+    if config.vaultwarden_state_dir:
+        candidates.append(Path(config.vaultwarden_state_dir))
+    candidates.extend([Path("/cache/.stack-back"), Path("/tmp/.stack-back")])
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+        except OSError:
+            continue
+    return None
+
+
+def _vaultwarden_intent_dir(config):
+    state_dir = _vaultwarden_state_dir(config)
+    if state_dir is None:
+        return None
+    intent_dir = state_dir / "vaultwarden-stops"
+    try:
+        intent_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as ex:
+        logger.warning("Could not create Vaultwarden intent directory: %s", ex)
+        return None
+    return intent_dir
+
+
+def write_vaultwarden_intents(config, containers: RunningContainers):
+    """Record consistent-mode containers we may stop, for crash recovery."""
+
+    intent_dir = _vaultwarden_intent_dir(config)
+    if intent_dir is None:
+        return
+    for container in containers.containers_for_backup():
+        if not container.vaultwarden_backup_enabled:
+            continue
+        if container.vaultwarden_mode != "consistent":
+            continue
+        if not container.is_running:
+            continue
+        try:
+            (intent_dir / f"{container.id}.json").write_text(
+                json.dumps({"id": container.id, "name": container.name})
+            )
+        except OSError as ex:
+            logger.warning("Could not write Vaultwarden stop intent: %s", ex)
+
+
+def recover_vaultwarden_intents(config):
+    """Restart Vaultwarden containers left stopped by an interrupted backup."""
+
+    intent_dir = _vaultwarden_intent_dir(config)
+    if intent_dir is None:
+        return
+    for intent_file in list(intent_dir.glob("*.json")):
+        try:
+            data = json.loads(intent_file.read_text())
+            container_id = data["id"]
+        except (OSError, ValueError, KeyError):
+            logger.warning("Ignoring invalid Vaultwarden intent %s", intent_file)
+            intent_file.unlink(missing_ok=True)
+            continue
+
+        if utils.container_is_running(container_id):
+            intent_file.unlink(missing_ok=True)
+            continue
+
+        logger.warning(
+            "Vaultwarden container %s was left stopped by a previous backup; restarting it",
+            data.get("name", container_id),
+        )
+        if utils.start_container(container_id):
+            intent_file.unlink(missing_ok=True)
+
+
+def _install_sigterm_handler():
+    def _handle(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    try:
+        signal.signal(signal.SIGTERM, _handle)
+    except (ValueError, OSError):
+        # Not in the main thread / unsupported platform.
+        pass
+
+
 def backup(config, containers: RunningContainers):
     """Request a backup to start"""
+    _install_sigterm_handler()
+    recover_vaultwarden_intents(config)
+
     # Make sure we don't spawn multiple backup processes
     if containers.backup_process_running:
         alerts.send(
@@ -164,14 +297,20 @@ def backup(config, containers: RunningContainers):
     mounts = containers.generate_backup_mounts("/volumes")
     volumes.update(mounts)
 
+    # Dedicated read-write mounts for SQLite/Vaultwarden.  These use
+    # docker.types.Mount so the same source can be mounted a second time.
+    dedicated_mounts = containers.generate_dedicated_mounts()
+
     logger.debug(
         "Starting backup container with image %s", containers.this_container.image
     )
+    write_vaultwarden_intents(config, containers)
     try:
         result = backup_runner.run(
             image=containers.this_container.image,
             command="rcb start-backup-process",
             volumes=volumes,
+            mounts=dedicated_mounts or None,
             environment=containers.this_container.environment,
             source_container_id=containers.this_container.id,
             labels={
@@ -187,6 +326,8 @@ def backup(config, containers: RunningContainers):
             alert_type="ERROR",
         )
         return
+    finally:
+        recover_vaultwarden_intents(config)
 
     logger.info("Backup container exit code: %s", result)
 
@@ -201,6 +342,7 @@ def backup(config, containers: RunningContainers):
 
 def start_backup_process(config, containers):
     """The actual backup process running inside the spawned container"""
+    _install_sigterm_handler()
     if not utils.is_true(os.environ.get("BACKUP_PROCESS_CONTAINER")):
         logger.error(
             "Cannot run backup process in this container. Use backup command instead. "
@@ -231,47 +373,59 @@ def start_backup_process(config, containers):
         exit(1)
 
     # stop containers labeled to stop during backup
-    if len(containers.stop_during_backup_containers) > 0:
-        utils.stop_containers(containers.stop_during_backup_containers)
+    stopped_containers = containers.stop_during_backup_containers
+    if stopped_containers:
+        utils.stop_containers(stopped_containers)
 
-    # back up volumes
-    if has_volumes:
-        try:
-            logger.info("Backing up volumes")
-            vol_result = restic.backup_files(config.repository, source="/volumes")
-            logger.debug("Volume backup exit code: %s", vol_result)
-            if vol_result != 0:
-                logger.error("Volume backup exited with non-zero code: %s", vol_result)
-                errors = True
-        except Exception as ex:
-            logger.error("Exception raised during volume backup")
-            logger.exception(ex)
-            errors = True
-
-    # back up databases
-    logger.info("Backing up databases")
-    for container in containers.containers_for_backup():
-        if container.database_backup_enabled:
+    try:
+        # back up volumes
+        if has_volumes:
             try:
-                instance = container.instance
-                logger.debug(
-                    "Backing up %s in service %s from project %s",
-                    instance.container_type,
-                    instance.service_name,
-                    instance.project_name,
+                logger.info("Backing up volumes")
+                excludes = containers.generate_volume_snapshot_excludes()
+                if excludes:
+                    logger.debug("Volume snapshot excludes: %s", excludes)
+                vol_result = restic.backup_files(
+                    config.repository,
+                    source="/volumes",
+                    excludes=excludes,
                 )
-                result = instance.backup()
-                logger.debug("Exit code: %s", result)
-                if result != 0:
-                    logger.error("Backup command exited with non-zero code: %s", result)
+                logger.debug("Volume backup exit code: %s", vol_result)
+                if vol_result != 0:
+                    logger.error(
+                        "Volume backup exited with non-zero code: %s", vol_result
+                    )
                     errors = True
             except Exception as ex:
+                logger.error("Exception raised during volume backup")
                 logger.exception(ex)
                 errors = True
 
-    # restart stopped containers after backup
-    if len(containers.stop_during_backup_containers) > 0:
-        utils.start_containers(containers.stop_during_backup_containers)
+        # back up database/SQLite/Vaultwarden handlers
+        logger.info("Backing up databases")
+        for container in containers.containers_for_backup():
+            for instance in container.backup_handlers():
+                try:
+                    logger.debug(
+                        "Backing up %s in service %s from project %s",
+                        instance.container_type,
+                        instance.service_name,
+                        instance.project_name,
+                    )
+                    result = instance.backup()
+                    logger.debug("Exit code: %s", result)
+                    if result != 0:
+                        logger.error(
+                            "Backup command exited with non-zero code: %s", result
+                        )
+                        errors = True
+                except Exception as ex:
+                    logger.exception(ex)
+                    errors = True
+    finally:
+        # restart stopped containers even if an unexpected exception escaped
+        if stopped_containers:
+            utils.start_containers(stopped_containers)
 
     if errors:
         logger.error("Exit code: %s", errors)

@@ -7,6 +7,7 @@ Automated incremental backups using [restic] for any docker-compose setup.
 
 * Backup docker volumes or host binds
 * Backup postgres, mariadb, and mysql databases
+* Backup SQLite databases online (WAL-safe) and Vaultwarden as a single snapshot
 * Notifications over SMTP or Discord webhooks
 
 # Usage
@@ -98,7 +99,35 @@ You can also use `stack-back` container labels for granular control over which v
       - mysql:/var/lib/mysql
 ```
 
+SQLite databases are exported online instead of being copied as raw files:
+
+```yaml
+  app:
+    image: some_image
+    labels:
+      - stack-back.sqlite: "true"
+      - stack-back.sqlite.paths: "/data/app.db,/data/cache.db"
+    volumes:
+      - app_data:/data
+```
+
+Vaultwarden gets a dedicated safe backup (default `online`, no restart; set
+`stack-back.vaultwarden.mode: "consistent"` for a brief stop and a strictly
+single-point snapshot):
+
+```yaml
+  vaultwarden:
+    image: vaultwarden/server:latest
+    labels:
+      - stack-back.vaultwarden: "true"
+      # - stack-back.vaultwarden.mode: "consistent"
+    volumes:
+      - vaultwarden_data:/data
+```
+
 Detailed documentation on compose labels can be found in the [stack-back documentation](https://stack-back.readthedocs.io/en/latest/guide/configuration.html#compose-labels)
+
+See also the [Vaultwarden backup guide](https://stack-back.readthedocs.io/en/latest/guide/vaultwarden.html).
 
 ## The `rcb` command
 

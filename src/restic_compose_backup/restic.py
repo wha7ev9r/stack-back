@@ -25,17 +25,39 @@ def init_repo(repository: str):
     )
 
 
-def backup_files(repository: str, source="/volumes"):
-    return commands.run(
-        restic(
-            repository,
-            [
-                "--verbose",
-                "backup",
-                source,
-            ],
-        )
+def backup_files(
+    repository: str,
+    source="/volumes",
+    excludes=None,
+    options=None,
+):
+    args = ["--verbose", "backup"]
+    for pattern in excludes or []:
+        args.extend(["--exclude", pattern])
+    args.extend(options or [])
+    args.append(source)
+    return commands.run(restic(repository, args))
+
+
+def backup_stdin_file(repository: str, filename, source_path):
+    """Back up a local file through restic's stdin interface.
+
+    The file must already be fully written and validated by the caller.  Using
+    a materialized file avoids restic's inability to detect truncated stdin
+    streams.
+    """
+
+    command = restic(
+        repository,
+        [
+            "backup",
+            "--stdin",
+            "--stdin-filename",
+            str(filename),
+        ],
     )
+    with open(source_path, "rb") as handle:
+        return commands.run(command, stdin=handle)
 
 
 def backup_from_stdin(

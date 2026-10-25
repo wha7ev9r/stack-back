@@ -1,5 +1,6 @@
 import logging
 from typing import List, Tuple, Union
+import docker
 from restic_compose_backup import utils
 from subprocess import Popen, PIPE
 
@@ -82,10 +83,10 @@ def docker_exec(
     return exit_code
 
 
-def run(cmd: List[str]) -> int:
+def run(cmd: List[str], stdin=None) -> int:
     """Run a command with parameters"""
-    logger.debug("cmd: %s", " ".join(cmd))
-    child = Popen(cmd, stdout=PIPE, stderr=PIPE)
+    logger.debug("cmd: %s", " ".join(map(str, cmd)))
+    child = Popen(cmd, stdin=stdin, stdout=PIPE, stderr=PIPE)
     stdoutdata, stderrdata = child.communicate()
 
     if stdoutdata.strip():
@@ -104,9 +105,68 @@ def run(cmd: List[str]) -> int:
 
 def run_capture_std(cmd: List[str]) -> Tuple[str, str]:
     """Run a command with parameters and return stdout, stderr"""
-    logger.debug("cmd: %s", " ".join(cmd))
+    logger.debug("cmd: %s", " ".join(map(str, cmd)))
     child = Popen(cmd, stdout=PIPE, stderr=PIPE)
     return child.communicate()
+
+
+def docker_path_is_file(container_id: str, path: str) -> bool:
+    """Check whether ``path`` is a regular file inside a container.
+
+    Shell/exec is preferred because socket proxies commonly block the archive
+    endpoint.  ``get_archive`` is used as a fallback for images without a
+    shell.  If neither method works the path is treated as unverifiable and
+    the backup itself will perform the strict check.
+    """
+
+    client = utils.docker_client()
+    try:
+        try:
+            container = client.containers.get(container_id)
+        except Exception as ex:
+            logger.error("Could not inspect container %s: %s", container_id, ex)
+            return False
+        try:
+            exit_code, _output = container.exec_run(
+                ["/bin/sh", "-c", 'test -f "$1"', "sh", path],
+                demux=True,
+            )
+            if exit_code == 0:
+                return True
+            if exit_code == 1:
+                logger.error("Path %s not found in container %s", path, container_id)
+                return False
+        except Exception as ex:
+            logger.debug("docker exec file check failed for %s: %s", path, ex)
+
+        try:
+            stream, stat = client.api.get_archive(container_id, path)
+            try:
+                next(stream, None)
+            finally:
+                close = getattr(stream, "close", None)
+                if close:
+                    close()
+            mode = (stat or {}).get("mode", 0)
+            if mode and (mode & 0o170000) != 0o100000:
+                logger.error(
+                    "Path %s in container %s is not a regular file", path, container_id
+                )
+                return False
+            return True
+        except docker.errors.NotFound:
+            logger.error("Path %s not found in container %s", path, container_id)
+            return False
+        except Exception as ex:
+            logger.warning(
+                "Could not verify path %s in container %s: %s",
+                path,
+                container_id,
+                ex,
+            )
+            return True
+    finally:
+        client.close()
 
 
 def log_std(source: str, data: str, level: int):
