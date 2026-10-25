@@ -110,13 +110,16 @@ def run_capture_std(cmd: List[str]) -> Tuple[str, str]:
     return child.communicate()
 
 
-def docker_path_is_file(container_id: str, path: str) -> bool:
+def docker_path_is_file(
+    container_id: str, path: str, *, log_missing: bool = True
+) -> bool:
     """Check whether ``path`` is a regular file inside a container.
 
     Shell/exec is preferred because socket proxies commonly block the archive
     endpoint.  ``get_archive`` is used as a fallback for images without a
     shell.  If neither method works the path is treated as unverifiable and
-    the backup itself will perform the strict check.
+    the backup itself will perform the strict check.  ``log_missing=False`` is
+    used for probing optional path variants without noisy errors.
     """
 
     client = utils.docker_client()
@@ -124,7 +127,8 @@ def docker_path_is_file(container_id: str, path: str) -> bool:
         try:
             container = client.containers.get(container_id)
         except Exception as ex:
-            logger.error("Could not inspect container %s: %s", container_id, ex)
+            if log_missing:
+                logger.error("Could not inspect container %s: %s", container_id, ex)
             return False
         try:
             exit_code, _output = container.exec_run(
@@ -134,7 +138,10 @@ def docker_path_is_file(container_id: str, path: str) -> bool:
             if exit_code == 0:
                 return True
             if exit_code == 1:
-                logger.error("Path %s not found in container %s", path, container_id)
+                if log_missing:
+                    logger.error(
+                        "Path %s not found in container %s", path, container_id
+                    )
                 return False
         except Exception as ex:
             logger.debug("docker exec file check failed for %s: %s", path, ex)
@@ -149,21 +156,26 @@ def docker_path_is_file(container_id: str, path: str) -> bool:
                     close()
             mode = (stat or {}).get("mode", 0)
             if mode and (mode & 0o170000) != 0o100000:
-                logger.error(
-                    "Path %s in container %s is not a regular file", path, container_id
-                )
+                if log_missing:
+                    logger.error(
+                        "Path %s in container %s is not a regular file",
+                        path,
+                        container_id,
+                    )
                 return False
             return True
         except docker.errors.NotFound:
-            logger.error("Path %s not found in container %s", path, container_id)
+            if log_missing:
+                logger.error("Path %s not found in container %s", path, container_id)
             return False
         except Exception as ex:
-            logger.warning(
-                "Could not verify path %s in container %s: %s",
-                path,
-                container_id,
-                ex,
-            )
+            if log_missing:
+                logger.warning(
+                    "Could not verify path %s in container %s: %s",
+                    path,
+                    container_id,
+                    ex,
+                )
             return True
     finally:
         client.close()

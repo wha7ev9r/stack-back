@@ -32,9 +32,6 @@ VAULTWARDEN_IMAGE_REPOS = (
 STAGING_MARKER = ".stack-back-staging"
 REQUIRED_DATABASE_TABLES = ("users", "__diesel_schema_migrations")
 
-_TRUE_VALUES = ["1", "true", "True", "TRUE", True, 1]
-_FALSE_VALUES = ["0", "false", "False", "FALSE", False, 0]
-
 
 class VaultwardenConfigError(Exception):
     """Raised when a Vaultwarden container cannot be backed up safely."""
@@ -52,14 +49,6 @@ class VaultwardenPaths:
     log_file: Path | None
     log_dir: Path | None
     db_rel: str
-
-
-def is_true(value) -> bool:
-    return value in _TRUE_VALUES
-
-
-def is_false(value) -> bool:
-    return value in _FALSE_VALUES
 
 
 def environment_to_dict(environment) -> dict:

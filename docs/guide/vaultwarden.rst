@@ -211,5 +211,6 @@ Status
 ------
 
 ``rcb status`` shows the mode, the resolved paths, the snapshot destination and
-whether the database file can be reached.  For ``consistent`` mode it also
-warns that the service will be stopped during the staging copy.
+whether the database file can be reached.  It also warns when no
+``rsa_key*`` variant is found.  For ``consistent`` mode it warns that the
+service will be stopped during the staging copy.

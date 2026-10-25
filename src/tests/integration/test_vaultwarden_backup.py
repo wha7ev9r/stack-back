@@ -1,36 +1,10 @@
 """Integration tests for the dedicated Vaultwarden backup mode."""
 
-import json
-
 import pytest
 
+from tests.integration.helpers import restore, snapshot_with_path, started_at
+
 pytestmark = pytest.mark.integration
-
-
-def _snapshots(backup_container):
-    exit_code, output = backup_container.exec_run("restic snapshots --json")
-    assert exit_code == 0, output.decode()
-    return json.loads(output.decode())
-
-
-def _snapshot_with_path(backup_container, path):
-    for snapshot in _snapshots(backup_container):
-        if path in snapshot["paths"]:
-            return snapshot
-    raise AssertionError(f"no snapshot containing {path}")
-
-
-def _restore(backup_container, snapshot_id, target):
-    backup_container.exec_run(f"rm -rf {target}")
-    exit_code, output = backup_container.exec_run(
-        ["restic", "restore", snapshot_id, "--target", target]
-    )
-    assert exit_code == 0, output.decode()
-
-
-def _started_at(container):
-    container.reload()
-    return container.attrs["State"]["StartedAt"]
 
 
 def test_vaultwarden_status(run_rcb_command):
@@ -50,16 +24,16 @@ def test_vaultwarden_online_backup(
     backup_container,
     vaultwarden_container,
 ):
-    started_before = _started_at(vaultwarden_container)
+    started_before = started_at(vaultwarden_container)
 
     exit_code, output = run_rcb_command("backup")
     assert exit_code == 0, output
 
-    assert _started_at(vaultwarden_container) == started_before, (
+    assert started_at(vaultwarden_container) == started_before, (
         "online mode must not restart Vaultwarden"
     )
 
-    snapshot = _snapshot_with_path(backup_container, "/vaultwarden/vaultwarden")
+    snapshot = snapshot_with_path(backup_container, "/vaultwarden/vaultwarden")
     code, output = backup_container.exec_run(["restic", "ls", snapshot["id"]])
     assert code == 0, output.decode()
     listed = output.decode()
@@ -72,7 +46,7 @@ def test_vaultwarden_online_backup(
     assert "/vaultwarden/vaultwarden/tmp" not in listed
     assert "/vaultwarden/vaultwarden/icon_cache" not in listed
 
-    _restore(backup_container, snapshot["id"], "/tmp/restore-vaultwarden")
+    restore(backup_container, snapshot["id"], "/tmp/restore-vaultwarden")
     code, output = backup_container.exec_run(
         [
             "python",
@@ -85,7 +59,7 @@ def test_vaultwarden_online_backup(
     assert code == 0, output.decode()
     assert output.decode().strip().splitlines() == ["ok", "1"]
 
-    volume_snapshot = _snapshot_with_path(backup_container, "/volumes")
+    volume_snapshot = snapshot_with_path(backup_container, "/volumes")
     code, output = backup_container.exec_run(["restic", "ls", volume_snapshot["id"]])
     assert code == 0
     assert "/volumes/vaultwarden/data" not in output.decode()
@@ -96,18 +70,18 @@ def test_vaultwarden_consistent_mode_restarts_container(
     backup_container,
     vaultwarden_consistent_container,
 ):
-    started_before = _started_at(vaultwarden_consistent_container)
+    started_before = started_at(vaultwarden_consistent_container)
 
     exit_code, output = run_rcb_command("backup")
     assert exit_code == 0, output
 
     vaultwarden_consistent_container.reload()
     assert vaultwarden_consistent_container.status == "running"
-    assert _started_at(vaultwarden_consistent_container) != started_before, (
+    assert started_at(vaultwarden_consistent_container) != started_before, (
         "consistent mode should stop and restart Vaultwarden"
     )
 
-    snapshot = _snapshot_with_path(
+    snapshot = snapshot_with_path(
         backup_container, "/vaultwarden/vaultwarden_consistent"
     )
     code, output = backup_container.exec_run(["restic", "ls", snapshot["id"]])

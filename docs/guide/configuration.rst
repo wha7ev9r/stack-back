@@ -437,8 +437,10 @@ stored as a separate snapshot:
     /databases/<service_name>/<container path without leading slash>
 
 For example ``/data/app.db`` becomes
-``/databases/myservice/data/app.db``.  Multiple databases produce multiple
-snapshots and do not provide cross-database atomicity.
+``/databases/myservice/data/app.db``.  With ``INCLUDE_PROJECT_NAME=true`` a
+project segment is inserted before the service name:
+``/databases/<project>/myservice/data/app.db``.  Multiple databases produce
+multiple snapshots and do not provide cross-database atomicity.
 
 When the same service also has volume backup enabled, the original database
 file and its ``-wal``/``-shm``/``-journal`` files are excluded from the
@@ -459,6 +461,12 @@ If the application opens the database with an exclusive lock, add
 ``stack-back.volumes.stop-during-backup: true`` as a fallback.  The backup
 process mounts the database volume read-write because SQLite may need to
 create/remove ``-shm``/``-wal`` files and may perform crash recovery.
+
+The online export holds a read transaction while it runs.  In rollback-journal
+mode this can block writers; in WAL mode a long-running read can prevent
+checkpointing and let the ``-wal`` file grow.  Exports normally finish in
+seconds, but for a large or busy database schedule the backup off-peak and
+monitor WAL size.
 
 Restore by stopping the service, restoring the database snapshot, deleting
 the target ``-wal``/``-shm``/``-journal`` files, fixing ownership and

@@ -1,33 +1,10 @@
 """Integration tests for SQLite online backups."""
 
-import json
-
 import pytest
 
+from tests.integration.helpers import restore, snapshot_with_path
+
 pytestmark = pytest.mark.integration
-
-
-def _snapshots(backup_container):
-    exit_code, output = backup_container.exec_run("restic snapshots --json")
-    assert exit_code == 0, output.decode()
-    return json.loads(output.decode())
-
-
-def _snapshot_with_path(backup_container, path):
-    for snapshot in _snapshots(backup_container):
-        if any(
-            path == item or path.startswith(item + "/") for item in snapshot["paths"]
-        ):
-            return snapshot
-    raise AssertionError(f"no snapshot containing {path}")
-
-
-def _restore(backup_container, snapshot_id, target):
-    backup_container.exec_run(f"rm -rf {target}")
-    exit_code, output = backup_container.exec_run(
-        ["restic", "restore", snapshot_id, "--target", target]
-    )
-    assert exit_code == 0, output.decode()
 
 
 def test_sqlite_status(run_rcb_command):
@@ -48,10 +25,10 @@ def test_live_wal_sqlite_backup_and_volume_exclusion(
     exit_code, output = run_rcb_command("backup")
     assert exit_code == 0, output
 
-    sqlite_snapshot = _snapshot_with_path(
-        backup_container, "/databases/sqlite/data/app.db"
+    sqlite_snapshot = snapshot_with_path(
+        backup_container, "/databases/sqlite/data/app.db", prefix=True
     )
-    _restore(backup_container, sqlite_snapshot["id"], "/tmp/restore-sqlite")
+    restore(backup_container, sqlite_snapshot["id"], "/tmp/restore-sqlite")
 
     code, output = backup_container.exec_run(
         [
@@ -67,7 +44,7 @@ def test_live_wal_sqlite_backup_and_volume_exclusion(
     assert lines[0] == "ok"
     assert int(lines[1]) >= 1
 
-    volume_snapshot = _snapshot_with_path(backup_container, "/volumes")
+    volume_snapshot = snapshot_with_path(backup_container, "/volumes")
     code, output = backup_container.exec_run(["restic", "ls", volume_snapshot["id"]])
     assert code == 0, output.decode()
     listed = output.decode()
@@ -88,10 +65,10 @@ def test_idle_wal_sqlite_only_backup(
     exit_code, output = run_rcb_command("backup")
     assert exit_code == 0, output
 
-    snapshot = _snapshot_with_path(
-        backup_container, "/databases/sqlite_only/data/only.db"
+    snapshot = snapshot_with_path(
+        backup_container, "/databases/sqlite_only/data/only.db", prefix=True
     )
-    _restore(backup_container, snapshot["id"], "/tmp/restore-sqlite-only")
+    restore(backup_container, snapshot["id"], "/tmp/restore-sqlite-only")
 
     code, output = backup_container.exec_run(
         [
@@ -105,7 +82,7 @@ def test_idle_wal_sqlite_only_backup(
     assert code == 0, output.decode()
     assert output.decode().strip().splitlines() == ["ok", "idle"]
 
-    volume_snapshot = _snapshot_with_path(backup_container, "/volumes")
+    volume_snapshot = snapshot_with_path(backup_container, "/volumes")
     code, output = backup_container.exec_run(["restic", "ls", volume_snapshot["id"]])
     assert code == 0
     assert "/volumes/sqlite_only" not in output.decode()

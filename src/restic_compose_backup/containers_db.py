@@ -19,14 +19,6 @@ from restic_compose_backup import (
 logger = logging.getLogger(__name__)
 
 
-def _config_int(name, default):
-    try:
-        return int(getattr(config, name))
-    except (TypeError, ValueError):
-        logger.warning("Invalid %s value, using %s", name, default)
-        return default
-
-
 def _config_float(name, default):
     try:
         return float(getattr(config, name))
@@ -441,6 +433,17 @@ class VaultwardenContainer(Container):
     def resolved_paths(self) -> vaultwarden.VaultwardenPaths:
         """Public path details for ``rcb status``."""
         return self._paths()
+
+    def rsa_key_present(self) -> bool:
+        """bool: Whether any known Vaultwarden RSA key variant exists."""
+        base = self._paths().rsa_key
+        candidates = {base}
+        for suffix in (".pem", ".der", ".pub.pem"):
+            candidates.add(base.with_name(base.name + suffix))
+        return any(
+            commands.docker_path_is_file(self.id, str(path), log_missing=False)
+            for path in candidates
+        )
 
     def _data_mount(self):
         paths = self._paths()

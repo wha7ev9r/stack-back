@@ -35,6 +35,45 @@ def _service(mode="online"):
     }
 
 
+def test_backup_does_not_recover_while_child_is_running():
+    containers = SimpleNamespace(
+        backup_process_running=True,
+        backup_process_container=SimpleNamespace(id="child", name="child"),
+    )
+    with (
+        mock.patch.object(cli.alerts, "send"),
+        mock.patch.object(cli, "recover_vaultwarden_intents") as recover,
+        pytest.raises(RuntimeError, match="already running"),
+    ):
+        cli.backup(SimpleNamespace(), containers)
+    recover.assert_not_called()
+
+
+def test_backup_skips_recovery_when_child_run_raises():
+    containers = SimpleNamespace(
+        backup_process_running=False,
+        this_container=SimpleNamespace(
+            volumes={}, image="img", environment={}, id="self"
+        ),
+        generate_backup_mounts=lambda _target: {},
+        generate_dedicated_mounts=lambda: [],
+        project_name="project",
+        backup_process_label="backup-label",
+    )
+    with (
+        mock.patch.object(cli, "write_vaultwarden_intents"),
+        mock.patch.object(
+            cli.backup_runner, "run", side_effect=RuntimeError("spawn failed")
+        ),
+        mock.patch.object(cli.alerts, "send"),
+        mock.patch.object(cli, "recover_vaultwarden_intents") as recover,
+    ):
+        cli.backup(SimpleNamespace(), containers)
+
+    # Only the initial recovery; the final one must wait for child completion.
+    recover.assert_called_once()
+
+
 def test_recover_vaultwarden_intents(tmp_path):
     config = SimpleNamespace(vaultwarden_state_dir=str(tmp_path))
     intent_dir = tmp_path / "vaultwarden-stops"
@@ -65,6 +104,16 @@ class VaultwardenBackupStateTests(BaseTestCase):
         handler._mounted_paths = lambda: mounted_paths
         handler._stage = mock.Mock(return_value=[])
         return handler
+
+    def test_rsa_key_present_checks_known_variants(self):
+        handler = self._handler("online")
+        handler._paths = lambda: SimpleNamespace(rsa_key=Path("/data/rsa_key"))
+        with mock.patch(
+            "restic_compose_backup.containers_db.commands.docker_path_is_file",
+            side_effect=lambda _container_id, path, **_kwargs: path
+            == "/data/rsa_key.pem",
+        ):
+            assert handler.rsa_key_present() is True
 
     def test_online_mode_does_not_stop(self):
         handler = self._prepare(

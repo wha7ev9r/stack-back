@@ -13,7 +13,7 @@ from restic_compose_backup import (
 )
 from restic_compose_backup.config import Config
 from restic_compose_backup.containers import RunningContainers
-from restic_compose_backup import cron, utils
+from restic_compose_backup import containers_db, cron, utils, vaultwarden
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,9 @@ def main():
         containers.this_container.set_config_env("LOG_LEVEL", args.log_level)
 
     if args.action == "status":
-        if not utils.is_true(os.environ.get("BACKUP_PROCESS_CONTAINER")):
+        if not utils.is_true(os.environ.get("BACKUP_PROCESS_CONTAINER")) and (
+            not containers.backup_process_running
+        ):
             recover_vaultwarden_intents(config)
         status(config, containers)
 
@@ -146,7 +148,7 @@ def status(config, containers):
                     ping,
                     destination if destination is not None else "<not configured>",
                 )
-            if instance.container_type == "vaultwarden":
+            if isinstance(instance, containers_db.VaultwardenContainer):
                 logger.info(
                     " - vaultwarden mode: %s",
                     container.vaultwarden_mode,
@@ -160,13 +162,22 @@ def status(config, containers):
                         vw_paths.attachments,
                         vw_paths.sends,
                     )
+                    if not instance.rsa_key_present():
+                        logger.warning(
+                            " - vaultwarden RSA key not found next to %s; "
+                            "check RSA_KEY_FILENAME before relying on a restore",
+                            vw_paths.rsa_key,
+                        )
                 except Exception as ex:
                     logger.error(
                         "Could not resolve Vaultwarden paths for service %s: %s",
                         container.service_name,
                         ex,
                     )
-                if container.vaultwarden_mode == "consistent":
+                if (
+                    container.vaultwarden_mode
+                    == vaultwarden.VAULTWARDEN_MODE_CONSISTENT
+                ):
                     logger.warning(
                         " - consistent mode stops Vaultwarden during the local "
                         "staging copy; required staging space is about the size "
@@ -222,7 +233,7 @@ def write_vaultwarden_intents(config, containers: RunningContainers):
     for container in containers.containers_for_backup():
         if not container.vaultwarden_backup_enabled:
             continue
-        if container.vaultwarden_mode != "consistent":
+        if container.vaultwarden_mode != vaultwarden.VAULTWARDEN_MODE_CONSISTENT:
             continue
         if not container.is_running:
             continue
@@ -275,9 +286,10 @@ def _install_sigterm_handler():
 def backup(config, containers: RunningContainers):
     """Request a backup to start"""
     _install_sigterm_handler()
-    recover_vaultwarden_intents(config)
 
-    # Make sure we don't spawn multiple backup processes
+    # Make sure we don't spawn multiple backup processes.  Do this before
+    # recovering stop intents: a running child may be holding Vaultwarden
+    # stopped intentionally for a consistent copy.
     if containers.backup_process_running:
         alerts.send(
             subject="Backup process container already running",
@@ -289,6 +301,8 @@ def backup(config, containers: RunningContainers):
             alert_type="ERROR",
         )
         raise RuntimeError("Backup process already running")
+
+    recover_vaultwarden_intents(config)
 
     # Map all volumes from the backup container into the backup process container
     volumes = containers.this_container.volumes
@@ -305,6 +319,7 @@ def backup(config, containers: RunningContainers):
         "Starting backup container with image %s", containers.this_container.image
     )
     write_vaultwarden_intents(config, containers)
+    child_finished = False
     try:
         result = backup_runner.run(
             image=containers.this_container.image,
@@ -318,6 +333,7 @@ def backup(config, containers: RunningContainers):
                 "com.docker.compose.project": containers.project_name,
             },
         )
+        child_finished = True
     except Exception as ex:
         logger.exception(ex)
         alerts.send(
@@ -327,7 +343,11 @@ def backup(config, containers: RunningContainers):
         )
         return
     finally:
-        recover_vaultwarden_intents(config)
+        # If we are aborted while the detached child is still running, it may
+        # be intentionally holding Vaultwarden stopped for a consistent copy.
+        # Let the child finish/restart it; stale intents are recovered next run.
+        if child_finished:
+            recover_vaultwarden_intents(config)
 
     logger.info("Backup container exit code: %s", result)
 
