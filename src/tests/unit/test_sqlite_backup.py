@@ -24,6 +24,16 @@ def create_database(path: Path, *, wal: bool = True, keep_open: bool = False):
     return connection
 
 
+def test_can_open_read_only(tmp_path):
+    database = tmp_path / "readable.db"
+    create_database(database)
+    assert sqlite_backup.can_open_read_only(database)
+
+    broken = tmp_path / "broken.db"
+    broken.write_bytes(sqlite_backup.SQLITE_MAGIC + b"not a database")
+    assert not sqlite_backup.can_open_read_only(broken)
+
+
 def test_find_sqlite_databases(tmp_path):
     create_database(tmp_path / "app.db")
     create_database(tmp_path / "extensionless", wal=False)

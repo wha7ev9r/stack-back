@@ -277,6 +277,16 @@ class SqliteContainer(Container):
             )
         for mount, root in roots:
             for database in sqlite_backup.find_sqlite_databases(root):
+                if not self.sqlite_auto_explicit and not (
+                    sqlite_backup.can_open_read_only(database)
+                ):
+                    logger.warning(
+                        "Skipping SQLite database %s in service %s: cannot be "
+                        "opened read-only; its raw /volumes copy remains",
+                        database,
+                        self.service_name,
+                    )
+                    continue
                 relative = database.relative_to(root).as_posix()
                 path = posixpath.normpath(posixpath.join(mount.destination, relative))
                 if path not in paths:

@@ -182,6 +182,19 @@ def is_sqlite_file(path: Path) -> bool:
         return False
 
 
+def can_open_read_only(database: Path) -> bool:
+    """Return True if SQLite can open and read the database read-only."""
+    database = Path(database)
+    try:
+        with closing(
+            sqlite3.connect(f"file:{database.as_uri()}?mode=ro", uri=True)
+        ) as connection:
+            connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+        return True
+    except (OSError, sqlite3.Error):
+        return False
+
+
 def find_sqlite_databases(root: Path) -> list[Path]:
     """Find SQLite database files under a mounted directory.
 

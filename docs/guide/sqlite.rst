@@ -119,6 +119,12 @@ opt-outs and limitations
 * A SQLite header identifies a database, not necessarily application data.
   Services that keep browser/cache/history SQLite files may produce extra
   snapshots.  Use explicit ``stack-back.sqlite.paths`` to narrow the scope.
+* Automatic mode preflights each detected database with a read-only
+  connection.  A database that cannot be opened read-only (for example a WAL
+  database whose ``-shm`` is not readable) is skipped with a warning, and its
+  raw file remains in ``/volumes``.  Use explicit paths (which use a
+  read-write mount) or the stop-during-backup fallback for that database if
+  its online export is required.
 * The service itself and a running backup-process container are never backup
   targets, even if the image name does not contain ``stack-back``.
 * SQLite WAL requires a local POSIX filesystem and a single host.  NFS/SMB,
