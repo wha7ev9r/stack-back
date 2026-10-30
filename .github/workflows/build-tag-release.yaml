@@ -7,11 +7,11 @@ on:
     paths-ignore:
       - .gitignore
       - .github/renovate.json
-      - .github/workflows/
+      - .github/workflows/**
       - .pre-commit-config.yaml
       - LICENSE
-      - README.MD
-      - docs/
+      - README.md
+      - docs/**
   workflow_dispatch:
 
 env:
