@@ -187,7 +187,7 @@ def can_open_read_only(database: Path) -> bool:
     database = Path(database)
     try:
         with closing(
-            sqlite3.connect(f"file:{database.as_uri()}?mode=ro", uri=True)
+            sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)
         ) as connection:
             connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
         return True
