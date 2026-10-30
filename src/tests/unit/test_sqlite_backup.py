@@ -26,7 +26,7 @@ def create_database(path: Path, *, wal: bool = True, keep_open: bool = False):
 
 def test_can_open_read_only(tmp_path):
     database = tmp_path / "readable.db"
-    create_database(database)
+    create_database(database, wal=False)
     assert sqlite_backup.can_open_read_only(database)
 
     broken = tmp_path / "broken.db"
