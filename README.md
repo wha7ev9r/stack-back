@@ -3,6 +3,8 @@
 
 [![docs](https://readthedocs.org/projects/stack-back/badge/?version=latest)](https://stack-back.readthedocs.io)
 
+[中文文档](https://wha7ev9r.github.io/stack-back/zh/)
+
 Automated incremental backups using [restic] for any docker-compose setup.
 
 * Backup docker volumes or host binds

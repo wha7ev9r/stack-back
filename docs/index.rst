@@ -8,6 +8,10 @@ Welcome to stack-back's documentation!
 
 Simple backup with restic_ for docker-compose setups.
 
+.. note::
+
+   中文文档：`点击这里 <zh/>`_
+
 .. toctree::
    :maxdepth: 3
    :caption: Contents:
