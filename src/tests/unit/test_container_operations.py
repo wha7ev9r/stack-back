@@ -75,7 +75,12 @@ class ContainerOperationTests(BaseTestCase):
             list_containers_func, fixtures.containers(containers=containers)
         ):
             result = RunningContainers()
-            self.assertEqual(len(result.containers), 4, msg="Three containers expected")
+            self.assertEqual(
+                len(result.containers),
+                3,
+                msg="Backup service must not be a backup target",
+            )
+            self.assertIsNone(result.get_service("backup"))
             self.assertNotEqual(
                 result.this_container, None, msg="No backup container found"
             )
