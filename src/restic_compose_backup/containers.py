@@ -196,10 +196,43 @@ class Container:
         )
 
     @property
-    def sqlite_auto_enabled(self) -> bool:
-        """bool: If ``stack-back.sqlite`` is set to ``auto``."""
+    def sqlite_auto_explicit(self) -> bool:
+        """bool: If ``stack-back.sqlite`` explicitly requests ``auto``."""
         value = self.get_label(enums.LABEL_SQLITE_ENABLED)
         return isinstance(value, str) and value.strip().lower() == "auto"
+
+    @property
+    def sqlite_auto_enabled(self) -> bool:
+        """bool: Auto-detect SQLite in this service's Compose data mounts.
+
+        Explicit ``stack-back.sqlite`` values keep their existing meaning:
+        ``true`` requires paths and ``false`` disables SQLite backups.  When
+        the label is absent, SQLite detection follows ``AUTO_BACKUP_ALL`` but
+        only for the service's backed-up volume/bind mounts.  Server database
+        services and Vaultwarden (including ttionya's backup image) are left
+        to their dedicated handlers.
+        """
+        value = self.get_label(enums.LABEL_SQLITE_ENABLED)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower() == "auto"
+        if value is not None:
+            return False
+
+        if not utils.is_true(config.auto_backup_all):
+            return False
+        if not self.volume_backup_enabled:
+            return False
+        if not self.filter_mounts():
+            return False
+        if self.database_backup_enabled or self.vaultwarden_backup_enabled:
+            return False
+
+        image = self.image.lower()
+        if vaultwarden.is_vaultwarden_image(image):
+            return False
+        if "vaultwarden-backup" in image or "ttionya" in image:
+            return False
+        return True
 
     @property
     def sqlite_paths(self) -> List[str]:
@@ -704,6 +737,23 @@ class RunningContainers:
                     )
 
         patterns = []
+
+        def add_patterns(raw_path, kind):
+            escaped = sqlite_backup.escape_restic_pattern(str(raw_path))
+            if kind == "dir":
+                candidates = [escaped]
+            else:
+                candidates = [
+                    escaped,
+                    escaped + "-wal",
+                    escaped + "-shm",
+                    escaped + "-journal",
+                    escaped + "-mj*",
+                ]
+            for pattern in candidates:
+                if pattern not in patterns:
+                    patterns.append(pattern)
+
         for container in self.containers_for_backup():
             if not container.volume_backup_enabled:
                 continue
@@ -720,22 +770,26 @@ class RunningContainers:
                         container.get_volume_backup_destination(mount, "/volumes")
                     )
                     raw_path = destination if relative == "" else destination / relative
-                    escaped = sqlite_backup.escape_restic_pattern(str(raw_path))
-                    if target["kind"] == "dir":
-                        if escaped not in patterns:
-                            patterns.append(escaped)
-                    else:
-                        for pattern in (
-                            escaped,
-                            escaped + "-wal",
-                            escaped + "-shm",
-                            escaped + "-journal",
-                        ):
-                            if pattern not in patterns:
-                                patterns.append(pattern)
-                        master = escaped + "-mj*"
-                        if master not in patterns:
-                            patterns.append(master)
+                    add_patterns(raw_path, target["kind"])
+
+        # The backup service itself may expose a parent bind (for example the
+        # whole 1Panel compose directory) at /volumes.  Exclude target
+        # databases from those inherited mounts as well.
+        for mount in getattr(self.this_container, "_mounts", []):
+            if not str(mount.destination).startswith("/volumes"):
+                continue
+            for target in targets:
+                relative = _target_relative_in_mount(
+                    target["source"],
+                    target["rel"],
+                    mount.source,
+                )
+                if relative is None:
+                    continue
+                destination = Path(mount.destination)
+                raw_path = destination if relative == "" else destination / relative
+                add_patterns(raw_path, target["kind"])
+
         return patterns
 
     def get_service(self, name) -> Container:

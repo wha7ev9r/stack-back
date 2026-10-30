@@ -240,11 +240,16 @@ class SqliteContainer(Container):
 
     _auto_paths = None
 
+    def _auto_candidate_mounts(self):
+        if self.sqlite_auto_explicit:
+            return self._mounts
+        return self.filter_mounts()
+
     def _auto_mounts(self):
         """Return ``(mount, read-only root)`` pairs for auto discovery."""
         roots = []
         exclude_bind = utils.is_true(config.exclude_bind_mounts)
-        for mount in self._mounts:
+        for mount in self._auto_candidate_mounts():
             if mount.type not in ("volume", "bind"):
                 continue
             if exclude_bind and mount.type == "bind":
@@ -273,9 +278,7 @@ class SqliteContainer(Container):
         for mount, root in roots:
             for database in sqlite_backup.find_sqlite_databases(root):
                 relative = database.relative_to(root).as_posix()
-                path = posixpath.normpath(
-                    posixpath.join(mount.destination, relative)
-                )
+                path = posixpath.normpath(posixpath.join(mount.destination, relative))
                 if path not in paths:
                     paths.append(path)
 
@@ -287,8 +290,13 @@ class SqliteContainer(Container):
                 self.service_name,
                 ", ".join(paths),
             )
-        else:
+        elif self.sqlite_auto_explicit:
             logger.error(
+                "SQLite auto-detection found no databases in service %s",
+                self.service_name,
+            )
+        else:
+            logger.debug(
                 "SQLite auto-detection found no databases in service %s",
                 self.service_name,
             )
@@ -351,7 +359,7 @@ class SqliteContainer(Container):
             exclude_bind = utils.is_true(config.exclude_bind_mounts)
             mounts = [
                 mount
-                for mount in self._mounts
+                for mount in self._auto_candidate_mounts()
                 if mount.type in ("volume", "bind")
                 and not (exclude_bind and mount.type == "bind")
             ]
@@ -399,7 +407,7 @@ class SqliteContainer(Container):
         specs = {}
         if self.sqlite_auto_enabled:
             exclude_bind = utils.is_true(config.exclude_bind_mounts)
-            for mount in self._mounts:
+            for mount in self._auto_candidate_mounts():
                 if mount.type not in ("volume", "bind"):
                     continue
                 if exclude_bind and mount.type == "bind":
@@ -483,7 +491,10 @@ class SqliteContainer(Container):
         if self.sqlite_auto_enabled:
             paths = self.discover()
             if not paths:
-                return 1
+                # Default auto mode is opportunistic; no SQLite found is not
+                # a backup failure.  Explicit ``stack-back.sqlite: auto`` does
+                # fail because the user asked for detection on this service.
+                return 1 if self.sqlite_auto_explicit else 0
         else:
             paths = self.sqlite_paths
             if not paths:

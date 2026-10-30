@@ -4,6 +4,7 @@ from unittest import mock
 
 import pytest
 
+from restic_compose_backup import containers as containers_module
 from restic_compose_backup.containers import RunningContainers
 from restic_compose_backup.containers_db import SqliteContainer, VaultwardenContainer
 from . import fixtures
@@ -191,6 +192,49 @@ class SqliteVaultwardenConfigurationTests(BaseTestCase):
                 running = RunningContainers()
             handler = running.get_service("app").backup_handlers()[0]
             assert handler._mount_and_rel("/data/app.db") == (None, None)
+
+    def test_sqlite_auto_defaults_with_auto_backup_all(self):
+        containers = self.createContainers()
+        containers += [
+            {
+                "service": "app",
+                "image": "nginx:alpine",
+                "mounts": [
+                    {
+                        "Source": "app_data",
+                        "Destination": "/data",
+                        "Type": "volume",
+                        "Name": "app_data",
+                    }
+                ],
+            },
+            {
+                "service": "ttionya",
+                "image": "ttionya/vaultwarden-backup:latest",
+                "mounts": [
+                    {
+                        "Source": "vw_data",
+                        "Destination": "/data",
+                        "Type": "volume",
+                        "Name": "vw_data",
+                    }
+                ],
+            },
+        ]
+        with (
+            mock.patch.object(containers_module.config, "auto_backup_all", "true"),
+            mock.patch(
+                list_containers_func, fixtures.containers(containers=containers)
+            ),
+        ):
+            running = RunningContainers()
+            app = running.get_service("app")
+            assert app.sqlite_auto_enabled
+            assert not app.sqlite_auto_explicit
+            assert isinstance(app.backup_handlers()[0], SqliteContainer)
+
+            ttionya = running.get_service("ttionya")
+            assert not ttionya.sqlite_auto_enabled
 
     def test_sqlite_auto_handler_is_cached(self):
         containers = self.createContainers()
