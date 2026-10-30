@@ -631,7 +631,15 @@ class RunningContainers:
             if container.is_oneoff:
                 continue
 
-            # Do not include the stack-back and backup process containers
+            # Never treat the backup service itself or a running backup
+            # process as data containers, even when a custom image name does
+            # not contain "stack-back".
+            if container.id == self.this_container.id:
+                continue
+            if container.is_backup_process_container:
+                continue
+
+            # Backwards-compatible image-name guard for detached backups.
             if "stack-back" in container.image:
                 continue
 
