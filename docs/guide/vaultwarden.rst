@@ -16,6 +16,31 @@ backup API) for ``db.sqlite3`` and copy ``attachments``, ``sends``,
 everything into one restic snapshot and verifies the database and staging
 directory before uploading.
 
+Alternative: ttionya/vaultwarden-backup
+---------------------------------------
+
+If you prefer a dedicated Vaultwarden backup tool, use
+`ttionya/vaultwarden-backup <https://github.com/ttionya/vaultwarden-backup>`_
+instead of stack-back's Vaultwarden handler.  Do not enable both.
+
+stack-back's automatic SQLite detection skips Vaultwarden and
+``ttionya/vaultwarden-backup`` images.  To prevent stack-back's AUTO volume
+backup from copying a second, potentially inconsistent copy of ``/data``,
+disable volume backup on the Vaultwarden service:
+
+.. code:: yaml
+
+    vaultwarden:
+      image: vaultwarden/server:latest
+      labels:
+        stack-back.volumes: "false"
+      volumes:
+        - vaultwarden_data:/data
+
+Configure the ttionya sidecar according to its upstream README.  It is
+responsible for its own schedule, destination, encryption and restore
+procedure; those are separate from the stack-back restic repository.
+
 Configuration
 -------------
 

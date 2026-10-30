@@ -410,8 +410,14 @@ in more complex situations.
 sqlite
 ~~~~~~
 
-SQLite databases can be backed up online with the official SQLite backup
-API.  Add the database paths inside the container:
+SQLite databases are backed up online with the official SQLite backup API.
+With ``AUTO_BACKUP_ALL=true`` and volume backup enabled, stack-back detects
+SQLite files in the service's backed-up Compose mounts automatically; no
+labels are required.  The scan is limited to those mounts and uses read-only
+source connections.  See :doc:`sqlite` for the full behavior, opt-outs and
+limits.
+
+Explicit paths remain available when you want to select specific databases:
 
 .. code:: yaml
 
@@ -425,8 +431,9 @@ API.  Add the database paths inside the container:
 
 The paths must be absolute, comma-separated and located on a directory
 volume or bind mount.  Glob patterns and single-file bind mounts are not
-supported.  SQLite is never auto-detected and ``AUTO_BACKUP_ALL`` does not
-enable it.
+supported.  Use ``stack-back.sqlite: false`` to opt a service out, or
+``stack-back.sqlite: auto`` to scan one service when ``AUTO_BACKUP_ALL`` is
+off.
 
 Each database is exported with SQLite's online backup API
 (``sqlite3.Connection.backup``), converted to rollback-journal mode and
@@ -458,9 +465,11 @@ If ``EXCLUDE_BIND_MOUNTS`` is enabled and a configured database lives on a
 bind mount, the backup fails instead of silently skipping the database.
 
 If the application opens the database with an exclusive lock, add
-``stack-back.volumes.stop-during-backup: true`` as a fallback.  The backup
-process mounts the database volume read-write because SQLite may need to
+``stack-back.volumes.stop-during-backup: true`` as a fallback.  Explicit-path
+backups mount the database volume read-write because SQLite may need to
 create/remove ``-shm``/``-wal`` files and may perform crash recovery.
+Automatic detection mounts the service's data read-only and opens the source
+database with ``mode=ro``.
 
 The online export holds a read transaction while it runs.  In rollback-journal
 mode this can block writers; in WAL mode a long-running read can prevent

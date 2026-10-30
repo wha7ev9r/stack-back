@@ -99,7 +99,13 @@ You can also use `stack-back` container labels for granular control over which v
       - mysql:/var/lib/mysql
 ```
 
-SQLite databases are exported online instead of being copied as raw files:
+With `AUTO_BACKUP_ALL=true`, SQLite databases are detected automatically in
+the service's backed-up Docker Compose mounts and exported online; no labels
+are needed. The scan is limited to project data, uses read-only mounts, and
+does not scan the host filesystem. Raw database files are excluded from the
+`/volumes` snapshot.
+
+Explicit paths are available when you want to select specific databases:
 
 ```yaml
   app:
@@ -110,6 +116,9 @@ SQLite databases are exported online instead of being copied as raw files:
     volumes:
       - app_data:/data
 ```
+
+Use `stack-back.sqlite: false` to opt out of SQLite backups for a service.
+See the [SQLite guide](https://stack-back.readthedocs.io/en/latest/guide/sqlite.html).
 
 Vaultwarden gets a dedicated safe backup (default `online`, no restart; set
 `stack-back.vaultwarden.mode: "consistent"` for a brief stop and a strictly
@@ -124,6 +133,10 @@ single-point snapshot):
     volumes:
       - vaultwarden_data:/data
 ```
+
+If you prefer [ttionya/vaultwarden-backup](https://github.com/ttionya/vaultwarden-backup),
+use that sidecar instead and set `stack-back.volumes: "false"` on the
+Vaultwarden service. Do not enable both backup methods.
 
 Detailed documentation on compose labels can be found in the [stack-back documentation](https://stack-back.readthedocs.io/en/latest/guide/configuration.html#compose-labels)
 
