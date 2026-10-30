@@ -152,9 +152,7 @@ def status(config, containers):
                 isinstance(instance, containers_db.SqliteContainer)
                 and container.sqlite_auto_enabled
             ):
-                logger.info(
-                    " - sqlite mode: auto (read-only discovery at backup time)"
-                )
+                logger.info(" - sqlite mode: auto (read-only discovery at backup time)")
             if isinstance(instance, containers_db.VaultwardenContainer):
                 logger.info(
                     " - vaultwarden mode: %s",

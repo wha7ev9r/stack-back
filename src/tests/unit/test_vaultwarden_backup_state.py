@@ -110,8 +110,9 @@ class VaultwardenBackupStateTests(BaseTestCase):
         handler._paths = lambda: SimpleNamespace(rsa_key=Path("/data/rsa_key"))
         with mock.patch(
             "restic_compose_backup.containers_db.commands.docker_path_is_file",
-            side_effect=lambda _container_id, path, **_kwargs: path
-            == "/data/rsa_key.pem",
+            side_effect=lambda _container_id, path, **_kwargs: (
+                path == "/data/rsa_key.pem"
+            ),
         ):
             assert handler.rsa_key_present() is True
 
