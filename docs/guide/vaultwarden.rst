@@ -1,6 +1,24 @@
 Vaultwarden
 ===========
 
+.. warning::
+
+   Vaultwarden is **not auto-enabled** by the latest automatic SQLite/volume
+   discovery.  You must add the dedicated labels explicitly:
+
+   .. code:: yaml
+
+       labels:
+         stack-back.vaultwarden: "true"
+         stack-back.vaultwarden.mode: "online"
+         stack-back.volumes: "false"
+
+   Without ``stack-back.vaultwarden``, stack-back will not back up the
+   Vaultwarden data.  Keep the labels even when regular services need no
+   labels.  If you use ttionya instead, do **not** enable
+   ``stack-back.vaultwarden``; use only ``stack-back.volumes: "false"`` and
+   let ttionya handle the data.
+
 stack-back can back up Vaultwarden with an online SQLite backup and a single
 restic snapshot containing the database and all important data files.
 
@@ -52,6 +70,7 @@ Add the following labels to the Vaultwarden service:
       image: vaultwarden/server:latest
       labels:
         stack-back.vaultwarden: "true"
+        stack-back.volumes: "false"
         # optional, default: online
         # stack-back.vaultwarden.mode: "online"
         # optional, default: false (icon_cache can be regenerated)

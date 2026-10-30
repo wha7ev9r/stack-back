@@ -226,9 +226,14 @@ Database detection is based on the default images for mariadb, mysql
 and postgres. When a database is detected, the volume associated with 
 the database data is automatically excluded from the backup.
 
-SQLite and Vaultwarden are **not** enabled by ``AUTO_BACKUP_ALL``: SQLite
-needs explicit paths, and Vaultwarden has an online/consistent mode choice.
-Use the ``stack-back.sqlite`` or ``stack-back.vaultwarden`` labels.
+SQLite is enabled automatically for volume-backed services; no
+``stack-back.sqlite`` labels are required.  Use explicit paths only when you
+want to narrow the scan or when a live WAL database cannot be opened by the
+read-only automatic preflight.  Use ``stack-back.sqlite: false`` to opt out.
+
+Vaultwarden is **not** auto-enabled by ``AUTO_BACKUP_ALL``: it needs the full
+``/data`` set and has an online/consistent mode choice.  It still requires the
+explicit ``stack-back.vaultwarden`` labels; see :doc:`vaultwarden`.
 
 Volumes can be excluded by adding the ``stack-back.volumes.exclude: <volume_name>``
 or ``stack-back.volumes: False`` label to the service.
@@ -333,11 +338,13 @@ Their path in restic will be:
 - /volumes/myservice/srv/files
 - /volumes/myservice/srv/data
 
-For SQLite databases use the ``stack-back.sqlite`` labels or the
-dedicated :doc:`vaultwarden` integration instead of relying on a raw
-volume copy.  ``stack-back.volumes.stop-during-backup`` remains available
-as a fallback for services that cannot be backed up online (for example a
-SQLite application holding an exclusive lock).  It stops the service during
+SQLite databases are detected automatically for volume-backed services; no
+labels are required.  Use ``stack-back.sqlite`` only for explicit path
+selection or opt-out.  Vaultwarden is the exception: it requires the dedicated
+:doc:`vaultwarden` labels instead of a raw volume copy.
+``stack-back.volumes.stop-during-backup`` remains available as a fallback for
+services that cannot be backed up online (for example a SQLite application
+holding an exclusive lock).  It stops the service during
 the whole backup and starts it again when the backup is done.
 
 Example:

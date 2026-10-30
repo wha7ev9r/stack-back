@@ -7,6 +7,12 @@ stack-back 用 restic 为 Docker Compose 项目做增量备份。它既可以备
 volume / bind mount，也可以备份 MySQL、MariaDB、PostgreSQL，以及
 SQLite 和 Vaultwarden。
 
+.. toctree::
+   :maxdepth: 2
+   :hidden:
+
+   restore
+
 .. contents:: 本页目录
    :depth: 2
    :local:
@@ -33,9 +39,12 @@ SQLite 和 Vaultwarden。
           - ./restic:/restic_data
           - ./cache:/cache
 
-需要备份的服务加上标签，或者设置 ``AUTO_BACKUP_ALL=true`` 自动备份
-它们的 volume。backup 服务自身需要能访问 Docker socket，并且
-``RESTIC_PASSWORD`` 必须安全保存；丢失它就无法恢复仓库。
+最新版本在 ``AUTO_BACKUP_ALL=true`` 下会自动备份普通服务的 volume 和
+SQLite，**不需要手动打标签**。只有例外需要标签：Vaultwarden（专用备份、
+不会自动启用）、需要显式指定路径的数据库，以及 WAF/缓存库的 opt-out。
+
+backup 服务自身需要能访问 Docker socket，并且 ``RESTIC_PASSWORD``
+必须安全保存；丢失它就无法恢复仓库。
 
 详细安装方式见 `安装文档 <../guide/install.html>`_。
 
@@ -99,6 +108,11 @@ SQLite 和 Vaultwarden。
 SQLite 备份
 -----------
 
+.. note::
+
+   最新版本普通服务 **不需要任何 SQLite 标签**。Vaultwarden 是明确的
+   例外，见下面的警告。
+
 当 ``AUTO_BACKUP_ALL=true`` 且服务启用 volume 备份时，stack-back 会
 自动识别该服务 **实际备份的 Docker Compose 挂载目录** 中的 SQLite：
 
@@ -112,7 +126,8 @@ SQLite 备份
 
 自动模式会先做只读预检。打不开的 DB（例如 WAL 的 ``-shm`` 在只读
 挂载下不可用）会被跳过并记录 warning，原始 ``/volumes`` 副本保留，
-不会让整次备份失败。
+不会让整次备份失败。这时该库的显式路径标签 **不是冗余**，例如 9router
+的活动库就需要显式路径。
 
 显式路径
 ~~~~~~~~
@@ -176,6 +191,22 @@ SQLite 备份
 Vaultwarden
 -----------
 
+.. warning::
+
+   **Vaultwarden 不会自动启用。** 即使普通服务已经不需要标签，Vaultwarden
+   仍必须显式配置专用备份，否则 stack-back 不会备份它的数据。使用
+   stack-back 专用模式时保留：
+
+   .. code:: yaml
+
+       labels:
+         stack-back.vaultwarden: "true"
+         stack-back.vaultwarden.mode: "online"
+         stack-back.volumes: "false"
+
+   如果使用 ttionya，则只保留 ``stack-back.volumes: "false"``，不要启用
+   ``stack-back.vaultwarden``；两套方案不要同时开。
+
 Vaultwarden 建议使用
 `ttionya/vaultwarden-backup <https://github.com/ttionya/vaultwarden-backup>`_
 作为独立备份方案：
@@ -203,6 +234,7 @@ Vaultwarden 建议使用
 
     labels:
       stack-back.vaultwarden: "true"
+      stack-back.volumes: "false"
       # 默认 online，不停止服务
       # stack-back.vaultwarden.mode: "consistent"
 
@@ -225,8 +257,20 @@ Vaultwarden 建议使用
     # 清理旧快照 / 维护
     docker compose exec backup rcb maintenance
 
-恢复时建议先停止业务服务，再把 restic 快照恢复到临时目录，确认数据库
-完整性后再替换。恢复数据库后要删除旧的 WAL/SHM/journal 文件。
+恢复数据
+--------
+
+完整步骤见 :doc:`restore`，包含：
+
+- 从 restic 快照恢复 bind mount / named volume；
+- 恢复 SQLite 的 ``/databases/...`` 快照并清理 WAL/SHM；
+- 恢复 Vaultwarden 的完整 ``/data``（attachments、sends、config、RSA key）；
+- 恢复 MySQL / MariaDB / PostgreSQL dump；
+- 恢复 1Panel 网站、SSL 证书、Compose 文件和 1Panel 数据。
+
+原则：先停止业务服务，恢复到临时目录，确认完整后再替换；恢复 SQLite
+后删除旧的 WAL/SHM/journal 文件。只恢复 ``/volumes`` 不够，SQLite 的
+权威副本在 ``/databases/...``。
 
 排错
 ----
@@ -259,5 +303,6 @@ ttionya。
 - `完整配置参考 <../guide/configuration.html>`_
 - `SQLite 详细说明 <../guide/sqlite.html>`_
 - `Vaultwarden <../guide/vaultwarden.html>`_
+- `恢复数据 <restore.html>`_
 - `rcb 命令 <../guide/rcb.html>`_
 - `工作原理 <../guide/advanced.html>`_

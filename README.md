@@ -1,7 +1,7 @@
 
 ![stack-back logo](./resources/stack-back_logo.svg)
 
-[![docs](https://readthedocs.org/projects/stack-back/badge/?version=latest)](https://stack-back.readthedocs.io)
+[![docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://wha7ev9r.github.io/stack-back/)
 
 [中文文档](https://wha7ev9r.github.io/stack-back/zh/)
 
@@ -43,7 +43,7 @@ services:
       - mysql:/var/lib/mysql  # Only SQL dump is backed up
 ```
 
-[Documentation](https://stack-back.readthedocs.io)
+[Documentation](https://wha7ev9r.github.io/stack-back/)
 
 Please report issus on [github](https://github.com/lawndoc/stack-back/issues).
 
@@ -101,11 +101,15 @@ You can also use `stack-back` container labels for granular control over which v
       - mysql:/var/lib/mysql
 ```
 
-With `AUTO_BACKUP_ALL=true`, SQLite databases are detected automatically in
-the service's backed-up Docker Compose mounts and exported online; no labels
-are needed. The scan is limited to project data, uses read-only mounts, and
-does not scan the host filesystem. Raw database files are excluded from the
-`/volumes` snapshot.
+With the latest version and `AUTO_BACKUP_ALL=true`, SQLite databases are
+detected automatically in the service's backed-up Docker Compose mounts and
+exported online; **no labels are needed** for ordinary services. The scan is
+limited to project data, uses read-only mounts, and does not scan the host
+filesystem. Raw database files are excluded from the `/volumes` snapshot.
+
+A live WAL database that cannot be opened by the read-only preflight is skipped
+with a warning; use explicit paths for that database if an online snapshot is
+required.
 
 Explicit paths are available when you want to select specific databases:
 
@@ -113,14 +117,18 @@ Explicit paths are available when you want to select specific databases:
   app:
     image: some_image
     labels:
-      - stack-back.sqlite: "true"
-      - stack-back.sqlite.paths: "/data/app.db,/data/cache.db"
+      stack-back.sqlite: "true"
+      stack-back.sqlite.paths: "/data/app.db,/data/cache.db"
     volumes:
       - app_data:/data
 ```
 
 Use `stack-back.sqlite: false` to opt out of SQLite backups for a service.
-See the [SQLite guide](https://stack-back.readthedocs.io/en/latest/guide/sqlite.html).
+See the [SQLite guide](https://wha7ev9r.github.io/stack-back/guide/sqlite.html).
+
+> **Vaultwarden is an explicit exception.** It is intentionally not
+> auto-enabled by volume/SQLite discovery and still requires the dedicated
+> labels below. Do not remove them when simplifying other services.
 
 Vaultwarden gets a dedicated safe backup (default `online`, no restart; set
 `stack-back.vaultwarden.mode: "consistent"` for a brief stop and a strictly
@@ -130,8 +138,9 @@ single-point snapshot):
   vaultwarden:
     image: vaultwarden/server:latest
     labels:
-      - stack-back.vaultwarden: "true"
-      # - stack-back.vaultwarden.mode: "consistent"
+      stack-back.vaultwarden: "true"
+      # stack-back.vaultwarden.mode: "consistent"
+      stack-back.volumes: "false"
     volumes:
       - vaultwarden_data:/data
 ```
@@ -140,9 +149,10 @@ If you prefer [ttionya/vaultwarden-backup](https://github.com/ttionya/vaultwarde
 use that sidecar instead and set `stack-back.volumes: "false"` on the
 Vaultwarden service. Do not enable both backup methods.
 
-Detailed documentation on compose labels can be found in the [stack-back documentation](https://stack-back.readthedocs.io/en/latest/guide/configuration.html#compose-labels)
+Detailed documentation on compose labels can be found in the [stack-back documentation](https://wha7ev9r.github.io/stack-back/guide/configuration.html#compose-labels)
 
-See also the [Vaultwarden backup guide](https://stack-back.readthedocs.io/en/latest/guide/vaultwarden.html).
+See also the [Vaultwarden backup guide](https://wha7ev9r.github.io/stack-back/guide/vaultwarden.html)
+and the [restore guide](https://wha7ev9r.github.io/stack-back/guide/restore.html).
 
 ## The `rcb` command
 
@@ -210,7 +220,7 @@ python src/setup.py build_sphinx
 ```
 
 [restic]: https://restic.net/
-[documentation]: https://stack-back.readthedocs.io
+[documentation]: https://wha7ev9r.github.io/stack-back/
 
 ---
 This project is an actively maintained fork of [restic-compose-backup](https://github.com/ZettaIO/restic-compose-backup) by [Zetta.IO](https://www.zetta.io).

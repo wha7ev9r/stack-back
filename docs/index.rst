@@ -20,6 +20,7 @@ Simple backup with restic_ for docker-compose setups.
    guide/configuration
    guide/sqlite
    guide/vaultwarden
+   guide/restore
    guide/rcb
    guide/advanced
 

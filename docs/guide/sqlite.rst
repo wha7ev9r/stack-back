@@ -9,6 +9,14 @@ validated, and stored as its own restic snapshot.
 Automatic mode (default with ``AUTO_BACKUP_ALL``)
 ------------------------------------------------
 
+.. note::
+
+   In the latest version, ordinary Compose services need **no SQLite labels**
+   when ``AUTO_BACKUP_ALL=true``.  A volume-backed service is discovered
+   automatically.  Vaultwarden is the deliberate exception: it is never
+   auto-enabled by generic SQLite detection and still requires the dedicated
+   ``stack-back.vaultwarden`` labels described below.
+
 Set ``AUTO_BACKUP_ALL=true`` and enable volume backup for the service.  No
 SQLite labels are needed:
 
@@ -59,6 +67,20 @@ Paths must be absolute, comma-separated and inside a directory volume/bind
 mount.  Glob patterns, single-file bind mounts and mount roots are not
 supported.  Explicit paths use a read-write mount so SQLite can create/remove
 WAL sidecars and perform crash recovery.
+
+Explicit paths are not always redundant.  A live WAL database may be readable
+by the application but fail the automatic read-only preflight because the
+backup mount cannot create/use its ``-shm`` file.  In that case automatic mode
+skips it and leaves the raw file in ``/volumes``; use an explicit path if an
+online snapshot is required.  For example, a 9router installation can keep:
+
+.. code:: yaml
+
+    labels:
+      stack-back.sqlite: "true"
+      stack-back.sqlite.paths: "/app/data/db/data.sqlite"
+
+while other SQLite services remain label-free and automatic.
 
 ``stack-back.sqlite: false`` opts a service out of both automatic and explicit
 SQLite backups.  This is useful for a container whose data is handled by
@@ -145,3 +167,6 @@ delete any existing ``-wal``/``-shm``/``-journal`` files next to the target,
 fix ownership/permissions, and start the service.  Restoring only
 ``/volumes`` is not sufficient when SQLite backup is enabled: the authoritative
 database is the separately stored ``/databases/...`` snapshot.
+
+See :doc:`restore` for complete commands covering SQLite, named volumes,
+Vaultwarden, database dumps and 1Panel websites/certificates.
